@@ -1,0 +1,75 @@
+{
+  "name": "@uaol/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared utilities and libraries for UAOL backend services",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "default": "./dist/config/index.js"
+    },
+    "./database/connection": {
+      "types": "./dist/database/connection.d.ts",
+      "default": "./dist/database/connection.js"
+    },
+    "./database/models/user": {
+      "types": "./dist/database/models/user.d.ts",
+      "default": "./dist/database/models/user.js"
+    },
+    "./database/models/mcp-tool": {
+      "types": "./dist/database/models/mcp-tool.d.ts",
+      "default": "./dist/database/models/mcp-tool.js"
+    },
+    "./database/models/processing-job": {
+      "types": "./dist/database/models/processing-job.d.ts",
+      "default": "./dist/database/models/processing-job.js"
+    },
+    "./mcp/client": {
+      "types": "./dist/mcp/client.d.ts",
+      "default": "./dist/mcp/client.js"
+    },
+    "./mq/queue": {
+      "types": "./dist/mq/queue.d.ts",
+      "default": "./dist/mq/queue.js"
+    },
+    "./auth/jwt": {
+      "types": "./dist/auth/jwt.d.ts",
+      "default": "./dist/auth/jwt.js"
+    },
+    "./logger": {
+      "types": "./dist/logger/index.d.ts",
+      "default": "./dist/logger/index.js"
+    },
+    "./errors": {
+      "types": "./dist/errors/index.d.ts",
+      "default": "./dist/errors/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/types/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/node": "^20.10.0",
+    "@types/pg": "^8.10.9",
+    "typescript": "^5.3.2"
+  }
+}
+

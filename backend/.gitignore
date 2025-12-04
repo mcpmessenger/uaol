@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.env.*.local
+.DS_Store
+*.pem
+*.key
+coverage/
+.nyc_output/
+.vscode/
+.idea/
+
