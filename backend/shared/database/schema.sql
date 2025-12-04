@@ -60,13 +60,16 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Triggers for updated_at
+-- Triggers for updated_at (DROP IF EXISTS to allow re-running migrations)
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_mcp_tools_updated_at ON mcp_tools;
 CREATE TRIGGER update_mcp_tools_updated_at BEFORE UPDATE ON mcp_tools
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_processing_jobs_updated_at ON processing_jobs;
 CREATE TRIGGER update_processing_jobs_updated_at BEFORE UPDATE ON processing_jobs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

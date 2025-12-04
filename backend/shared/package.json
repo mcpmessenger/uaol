@@ -43,6 +43,10 @@
       "types": "./dist/auth/jwt.d.ts",
       "default": "./dist/auth/jwt.js"
     },
+    "./auth/optional-authenticate": {
+      "types": "./dist/auth/optional-authenticate.d.ts",
+      "default": "./dist/auth/optional-authenticate.js"
+    },
     "./logger": {
       "types": "./dist/logger/index.d.ts",
       "default": "./dist/logger/index.js"

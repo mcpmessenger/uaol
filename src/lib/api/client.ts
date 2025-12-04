@@ -56,6 +56,10 @@ class ApiClient {
 
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
+    } else if (typeof window !== 'undefined') {
+      // Guest mode - send guest ID
+      const { getGuestId } = await import('../guest-session');
+      headers['X-Guest-Id'] = getGuestId();
     }
 
     try {
@@ -89,6 +93,13 @@ class ApiClient {
   }
 
   // Auth endpoints
+  async register(email: string): Promise<ApiResponse<{ token: string; user: any; apiKey: string }>> {
+    return this.request('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
   async login(email: string, apiKey?: string): Promise<ApiResponse<{ token: string }>> {
     return this.request('/auth/login', {
       method: 'POST',
@@ -133,6 +144,102 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ message }),
     });
+  }
+
+  // File upload endpoint
+  async uploadFiles(files: File[]): Promise<ApiResponse<{ files: any[]; summary: any }>> {
+    const formData = new FormData();
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+
+    const url = `${this.baseUrl}/chat/upload`;
+    
+    const headers: HeadersInit = {};
+    
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    } else if (typeof window !== 'undefined') {
+      const { getGuestId } = await import('../guest-session');
+      headers['X-Guest-Id'] = getGuestId();
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data.error || {
+            code: 'HTTP_ERROR',
+            message: `HTTP ${response.status}: ${response.statusText}`,
+          },
+        };
+      }
+
+      return data;
+    } catch (error: any) {
+      return {
+        success: false,
+        error: {
+          code: 'NETWORK_ERROR',
+          message: error.message || 'Network request failed',
+        },
+      };
+    }
+  }
+
+  // Voice endpoints
+  async transcribeAudio(audioBlob: Blob): Promise<ApiResponse<{ text: string }>> {
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'recording.webm');
+
+    const url = `${this.baseUrl}/chat/transcribe`;
+    
+    const headers: HeadersInit = {};
+    
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    } else if (typeof window !== 'undefined') {
+      const { getGuestId } = await import('../guest-session');
+      headers['X-Guest-Id'] = getGuestId();
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data.error || {
+            code: 'HTTP_ERROR',
+            message: `HTTP ${response.status}: ${response.statusText}`,
+          },
+        };
+      }
+
+      return data;
+    } catch (error: any) {
+      return {
+        success: false,
+        error: {
+          code: 'NETWORK_ERROR',
+          message: error.message || 'Network request failed',
+        },
+      };
+    }
   }
 }
 

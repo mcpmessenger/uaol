@@ -13,6 +13,7 @@ authRoutes.post('/api-key/regenerate', authenticate, authController.regenerateAp
 authRoutes.get('/api-key', authenticate, authController.getApiKey);
 
 // Session routes
+authRoutes.post('/register', authController.register);
 authRoutes.post('/login', authController.login);
 authRoutes.post('/logout', authenticate, authController.logout);
 authRoutes.get('/me', authenticate, authController.getCurrentUser);

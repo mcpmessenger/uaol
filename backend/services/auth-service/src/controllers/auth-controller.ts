@@ -3,7 +3,7 @@ import { getDatabasePool } from '@uaol/shared/database/connection';
 import { UserModel } from '@uaol/shared/database/models/user';
 import { generateToken, verifyToken, extractTokenFromHeader } from '@uaol/shared/auth/jwt';
 import { createLogger } from '@uaol/shared/logger';
-import { AuthenticationError } from '@uaol/shared/errors';
+import { AuthenticationError, ValidationError } from '@uaol/shared/errors';
 import { config } from '@uaol/shared/config';
 
 const logger = createLogger('auth-service');
@@ -57,6 +57,48 @@ export const authController = {
             id: user.user_id,
             email: user.email,
             subscriptionTier: user.subscription_tier,
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async register(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { email } = req.body;
+
+      if (!email) {
+        throw new ValidationError('Email is required');
+      }
+
+      // Check if user already exists
+      const existingUser = await userModel.findByEmail(email);
+      if (existingUser) {
+        throw new ValidationError('User with this email already exists');
+      }
+
+      // Create new user (API key is auto-generated)
+      const user = await userModel.create(email);
+
+      // Generate token for immediate login
+      const token = generateToken({
+        userId: user.user_id,
+        email: user.email,
+        subscriptionTier: user.subscription_tier,
+      });
+
+      res.status(201).json({
+        success: true,
+        data: {
+          token,
+          user: {
+            id: user.user_id,
+            email: user.email,
+            subscriptionTier: user.subscription_tier,
+            credits: user.current_credits.toString(),
+            apiKey: user.api_key, // Return API key on registration
           },
         },
       });

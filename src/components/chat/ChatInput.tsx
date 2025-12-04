@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Slash, Workflow, Bot, Quote, Settings, Sparkles } from "lucide-react";
+import { Send, Slash, Workflow, Bot, Quote, Settings, Sparkles, Mic, MicOff, Volume2, Paperclip, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/GlassPanel";
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
 
 interface Command {
   name: string;
@@ -18,15 +19,20 @@ const commands: Command[] = [
 ];
 
 interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, files?: File[]) => void;
+  onVoiceTranscribe?: (text: string) => void;
   disabled?: boolean;
 }
 
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export function ChatInput({ onSend, onVoiceTranscribe, disabled }: ChatInputProps) {
   const [input, setInput] = useState("");
   const [showCommands, setShowCommands] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState(0);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { isRecording, startRecording, stopRecording, error: recorderError } = useVoiceRecorder();
 
   const filteredCommands = input.startsWith("/")
     ? commands.filter((cmd) =>
@@ -44,10 +50,29 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   }, [input, filteredCommands.length]);
 
   const handleSubmit = () => {
-    if (!input.trim() || disabled) return;
-    onSend(input.trim());
+    if ((!input.trim() && selectedFiles.length === 0) || disabled) return;
+    onSend(input.trim(), selectedFiles.length > 0 ? selectedFiles : undefined);
     setInput("");
+    setSelectedFiles([]);
     setShowCommands(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setSelectedFiles((prev) => [...prev, ...files]);
+    }
+  };
+
+  const removeFile = (index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -88,6 +113,37 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   useEffect(() => {
     adjustHeight();
   }, [input]);
+
+  const handleVoiceRecord = async () => {
+    if (isRecording) {
+      // Stop recording and transcribe
+      setIsTranscribing(true);
+      const audioBlob = await stopRecording();
+      
+      if (audioBlob && onVoiceTranscribe) {
+        try {
+          const { apiClient } = await import('@/lib/api/client');
+          const response = await apiClient.transcribeAudio(audioBlob);
+          
+          if (response.success && response.data?.text) {
+            const transcribedText = response.data.text;
+            onVoiceTranscribe(transcribedText);
+            setInput(transcribedText);
+          } else {
+            console.error('Transcription failed:', response.error);
+            alert('Failed to transcribe audio. Please try again.');
+          }
+        } catch (error) {
+          console.error('Transcription error:', error);
+          alert('Failed to transcribe audio. Please try again.');
+        }
+      }
+      setIsTranscribing(false);
+    } else {
+      // Start recording
+      await startRecording();
+    }
+  };
 
   return (
     <div className="relative w-full max-w-4xl mx-auto">
@@ -136,19 +192,56 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         )}
       </AnimatePresence>
 
+      {/* Selected Files Preview */}
+      {selectedFiles.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {selectedFiles.map((file, index) => (
+            <motion.div
+              key={index}
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20 text-sm"
+            >
+              <Paperclip className="w-3.5 h-3.5 text-primary" />
+              <span className="text-foreground truncate max-w-[200px]">{file.name}</span>
+              <span className="text-muted-foreground text-xs">
+                ({(file.size / 1024).toFixed(1)} KB)
+              </span>
+              <button
+                onClick={() => removeFile(index)}
+                className="ml-1 p-0.5 hover:bg-primary/20 rounded transition-colors"
+                title="Remove file"
+              >
+                <X className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
+              </button>
+            </motion.div>
+          ))}
+        </div>
+      )}
+
       {/* Input Bar */}
       <GlassPanel className="flex items-end gap-3 p-3 pr-3">
         <div className="flex-shrink-0 p-2 text-muted-foreground">
           <Slash className="w-5 h-5" />
         </div>
 
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={handleFileSelect}
+          className="hidden"
+          accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.xls,.json,.xml,.jpg,.jpeg,.png,.gif,.webp"
+        />
+
         <textarea
           ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Message UAOL or type / for commands..."
-          disabled={disabled}
+          placeholder={selectedFiles.length > 0 ? "Add a message (optional)..." : "Message UAOL or type / for commands..."}
+          disabled={disabled || isTranscribing}
           rows={1}
           className={cn(
             "flex-1 bg-transparent resize-none outline-none text-foreground placeholder:text-muted-foreground",
@@ -157,14 +250,56 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           )}
         />
 
+        {/* Upload Button */}
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={handleUploadClick}
+          disabled={disabled || isTranscribing}
+          className={cn(
+            "flex-shrink-0 p-3 rounded-xl transition-all duration-200",
+            selectedFiles.length > 0
+              ? "bg-primary/20 text-primary"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted"
+          )}
+          title="Upload files"
+        >
+          <Paperclip className="w-5 h-5" />
+        </motion.button>
+
+        {/* Voice Record Button */}
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={handleVoiceRecord}
+          disabled={disabled || isTranscribing}
+          className={cn(
+            "flex-shrink-0 p-3 rounded-xl transition-all duration-200",
+            isRecording
+              ? "bg-red-500 text-white animate-pulse"
+              : isTranscribing
+              ? "bg-muted text-muted-foreground"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted"
+          )}
+          title={isRecording ? "Stop recording" : "Start voice recording"}
+        >
+          {isRecording ? (
+            <MicOff className="w-5 h-5" />
+          ) : isTranscribing ? (
+            <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <Mic className="w-5 h-5" />
+          )}
+        </motion.button>
+
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
           onClick={handleSubmit}
-          disabled={!input.trim() || disabled}
+          disabled={(!input.trim() && selectedFiles.length === 0) || disabled || isTranscribing}
           className={cn(
             "flex-shrink-0 p-3 rounded-xl transition-all duration-200",
-            input.trim()
+            (input.trim() || selectedFiles.length > 0) && !isTranscribing
               ? "bg-primary text-primary-foreground shadow-aurora"
               : "bg-muted text-muted-foreground"
           )}
@@ -178,6 +313,8 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         Press <kbd className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">/</kbd> for commands
         <span className="mx-2">•</span>
         <kbd className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">Enter</kbd> to send
+        <span className="mx-2">•</span>
+        Click <Paperclip className="w-3 h-3 inline" /> to upload files
       </p>
     </div>
   );

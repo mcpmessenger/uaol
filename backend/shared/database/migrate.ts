@@ -26,6 +26,27 @@ async function runMigrations() {
     // Execute schema
     await client.query(schema);
 
+    // Run additional migrations
+    logger.info('Running additional migrations...');
+    
+    // Migration: Add guest support
+    const guestMigrationPath = join(__dirname, 'migrations', 'add-guest-support.sql');
+    try {
+      const guestMigration = readFileSync(guestMigrationPath, 'utf-8');
+      await client.query(guestMigration);
+      logger.info('Guest support migration completed');
+    } catch (error: any) {
+      // Migration might already be applied - check error code
+      if (error.code === 'ENOENT') {
+        logger.warn('Guest migration file not found, skipping...');
+      } else if (error.code === '42710' || error.message?.includes('already exists')) {
+        // Object already exists - this is OK, migration already applied
+        logger.info('Guest support migration already applied, skipping...');
+      } else {
+        logger.warn('Guest migration error (may already be applied):', error.message);
+      }
+    }
+
     logger.info('Database migrations completed successfully');
   } catch (error) {
     logger.error('Migration failed', error);

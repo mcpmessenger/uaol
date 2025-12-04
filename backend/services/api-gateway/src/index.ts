@@ -3,33 +3,88 @@ import dotenv from 'dotenv';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { existsSync } from 'fs';
 
-// Load .env from backend root (2 levels up from src/index.ts)
+// Load .env from backend root
+// From: backend/services/api-gateway/src/index.ts
+// To: backend/.env (need to go up 3 levels: src -> api-gateway -> services -> backend)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const envPath = resolve(__dirname, '../../.env');
-dotenv.config({ path: envPath });
+const envPath = resolve(__dirname, '../../../.env'); // FIXED: was ../../, now ../../../
+dotenv.config({ path: envPath, override: true });
 
 import express from 'express';
 import cors from 'cors';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import multer from 'multer';
+import path from 'path';
 import { config } from '@uaol/shared/config';
 import { createLogger } from '@uaol/shared/logger';
 import { rateLimiter } from './middleware/rate-limiter';
+import { optionalAuthenticate } from '@uaol/shared/auth/optional-authenticate';
+
+// Configure multer for audio file uploads (Whisper)
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB limit (Whisper max)
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept audio files
+    if (file.mimetype.startsWith('audio/') || file.mimetype === 'application/octet-stream') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files are allowed'));
+    }
+  },
+});
+
+// Configure multer for general file uploads
+const fileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit per file
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept common file types
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'text/plain',
+      'text/markdown',
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/json',
+      'application/xml',
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+    ];
+    
+    if (allowedTypes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type ${file.mimetype} not allowed`));
+    }
+  },
+});
 
 // Verify .env was loaded
+const logger = createLogger('api-gateway');
 console.log('🔍 Environment check:');
 console.log('  .env path:', envPath);
+console.log('  .env exists:', existsSync(envPath));
 console.log('  OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ SET (' + process.env.OPENAI_API_KEY.substring(0, 20) + '...)' : '✗ NOT SET');
 console.log('  DATABASE_URL:', process.env.DATABASE_URL ? '✓ SET' : '✗ NOT SET');
 
-const logger = createLogger('api-gateway');
 const app = express();
 
 app.use(cors());
-app.use(express.json());
 
-// Health check
+// Health check (before JSON parsing)
 app.get('/health', (req, res) => {
   res.json({
     service: 'api-gateway',
@@ -41,8 +96,20 @@ app.get('/health', (req, res) => {
 // Rate limiting
 app.use(rateLimiter);
 
+// Apply express.json() only for non-multipart routes
+// Multer routes handle their own body parsing for multipart/form-data
+app.use((req, res, next) => {
+  // Skip JSON parsing for routes that use multer (multipart/form-data)
+  if (req.path === '/chat/upload' || req.path === '/chat/transcribe') {
+    return next();
+  }
+  // For other routes, parse JSON
+  express.json()(req, res, next);
+});
+
 // Chat endpoint - processes messages with AI
-app.post('/chat', async (req, res) => {
+// Uses optional auth: works for both authenticated users and guests
+app.post('/chat', optionalAuthenticate, async (req, res) => {
   try {
     const { message } = req.body;
     
@@ -90,18 +157,18 @@ app.post('/chat', async (req, res) => {
         },
         body: JSON.stringify({
           model: openaiModel,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are UAOL (Universal AI Orchestration Layer), an AI assistant that helps users execute complex workflows, analyze data, and orchestrate AI tools. Be helpful, concise, and professional.',
-            },
-            {
-              role: 'user',
-              content: message,
-            },
-          ],
+                  messages: [
+                    {
+                      role: 'system',
+                      content: 'You are UAOL (Universal AI Orchestration Layer), an AI assistant that helps users execute complex workflows, analyze data, and orchestrate AI tools. When users upload documents, you have access to the extracted text content. Analyze documents thoroughly, summarize key points, answer questions about the content, and provide insights. Be helpful, concise, and professional.',
+                    },
+                    {
+                      role: 'user',
+                      content: message,
+                    },
+                  ],
           temperature: 0.7,
-          max_tokens: 500,
+          max_tokens: 2000, // Increased for document analysis
         }),
       });
 
@@ -137,6 +204,154 @@ app.post('/chat', async (req, res) => {
       error: {
         code: 'INTERNAL_ERROR',
         message: error.message || 'Failed to process chat message',
+      },
+    });
+  }
+});
+
+// File upload endpoint
+app.post('/chat/upload', optionalAuthenticate, fileUpload.array('files', 10), async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const files = (req.files as Express.Multer.File[]) || [];
+
+    if (!files || files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'At least one file is required',
+        },
+      });
+    }
+
+    logger.info('File upload request', { 
+      userId: user.user_id, 
+      fileCount: files.length,
+      files: files.map(f => ({ name: f.originalname, size: f.size, type: f.mimetype }))
+    });
+
+    // Process all files
+    const { processFile } = await import('./services/file-processor.js');
+    const processedFiles = await Promise.all(
+      files.map(file => processFile(file, user.user_id))
+    );
+
+    // If files contain text, we can optionally analyze them with AI
+    const filesWithText = processedFiles.filter(f => f.extractedText);
+    
+    res.json({
+      success: true,
+      data: {
+        files: processedFiles.map(f => ({
+          fileId: f.fileId,
+          filename: f.originalName,
+          size: f.size,
+          type: f.mimeType,
+          url: f.url,
+          extractedText: f.extractedText,
+          metadata: f.metadata,
+        })),
+        summary: {
+          total: processedFiles.length,
+          withText: filesWithText.length,
+          totalSize: processedFiles.reduce((sum, f) => sum + f.size, 0),
+        },
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    logger.error('File upload error', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to upload files',
+      },
+    });
+  }
+});
+
+// Whisper transcription endpoint (STT)
+app.post('/chat/transcribe', optionalAuthenticate, audioUpload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Audio file is required',
+        },
+      });
+    }
+
+    const openaiApiKey = process.env.OPENAI_API_KEY || '';
+    
+    if (!openaiApiKey) {
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'CONFIGURATION_ERROR',
+          message: 'OpenAI API key not configured',
+        },
+      });
+    }
+
+    logger.info('Transcription request received', { 
+      fileSize: req.file.size,
+      mimetype: req.file.mimetype 
+    });
+
+    // Convert audio to format Whisper accepts (if needed)
+    // Whisper accepts: mp3, mp4, mpeg, mpga, m4a, wav, webm
+    const audioFile = req.file;
+
+    // Create FormData for OpenAI Whisper API
+    // Use form-data package for Node.js
+    const FormData = (await import('form-data')).default;
+    const formData = new FormData();
+    formData.append('file', audioFile.buffer, {
+      filename: audioFile.originalname || 'recording.webm',
+      contentType: audioFile.mimetype || 'audio/webm',
+    });
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'en'); // Optional: auto-detect if not specified
+
+    // Call OpenAI Whisper API
+    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+        ...formData.getHeaders(),
+      },
+      body: formData as any,
+    });
+
+    if (!whisperResponse.ok) {
+      const errorData = await whisperResponse.json();
+      logger.error('Whisper API error', errorData);
+      throw new Error(errorData.error?.message || 'Whisper API error');
+    }
+
+    const transcriptionData = await whisperResponse.json();
+    const transcribedText = transcriptionData.text || '';
+
+    logger.info('Transcription successful', { textLength: transcribedText.length });
+
+    res.json({
+      success: true,
+      data: {
+        text: transcribedText,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (error: any) {
+    logger.error('Transcription endpoint error', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Failed to transcribe audio',
       },
     });
   }
@@ -178,6 +393,10 @@ app.use('/storage', createProxyMiddleware({
   changeOrigin: true,
   pathRewrite: { '^/storage': '/storage' },
 }));
+
+// Serve uploaded files statically
+const uploadsDir = path.join(__dirname, '../../uploads');
+app.use('/uploads', express.static(uploadsDir));
 
 const port = config.apiGateway.port;
 

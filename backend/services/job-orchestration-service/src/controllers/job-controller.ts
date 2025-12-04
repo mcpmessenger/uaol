@@ -15,6 +15,7 @@ export const jobController = {
   async createJob(req: Request, res: Response, next: NextFunction) {
     try {
       const user = (req as any).user;
+      const isGuest = (req as any).isGuest || false;
       const { workflow_definition } = req.body;
 
       if (!workflow_definition || !workflow_definition.steps) {
@@ -27,7 +28,19 @@ export const jobController = {
 
       // Check user credits
       if (user.current_credits < BigInt(estimatedCost)) {
-        throw new InsufficientCreditsError(estimatedCost, Number(user.current_credits));
+        const errorMessage = isGuest
+          ? 'Guest credits exhausted. Please sign up for more credits.'
+          : 'Insufficient credits. Please purchase more credits.';
+        throw new InsufficientCreditsError(estimatedCost, Number(user.current_credits), errorMessage);
+      }
+
+      // For guests, log usage
+      if (isGuest) {
+        logger.info('Guest user creating job', {
+          userId: user.user_id,
+          creditsBefore: Number(user.current_credits),
+          estimatedCost,
+        });
       }
 
       // Create job

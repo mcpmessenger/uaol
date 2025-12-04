@@ -3,8 +3,10 @@ import { motion } from "framer-motion";
 import { ChatMessage, Message } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { WorkflowResultCard, WorkflowResult } from "./WorkflowResultCard";
-import { Sparkles } from "lucide-react";
+import { Sparkles, Volume2, VolumeX } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api/client";
+import { useTextToSpeech } from "@/hooks/use-text-to-speech";
 
 const welcomeMessages: Message[] = [
   {
@@ -37,7 +39,9 @@ export function ChatContainer() {
   const [messages, setMessages] = useState<Message[]>(welcomeMessages);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showWorkflow, setShowWorkflow] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { isSpeaking, speak, stop: stopTTS } = useTextToSpeech();
 
   const scrollToBottom = () => {
     if (scrollRef.current) {
@@ -52,11 +56,13 @@ export function ChatContainer() {
     scrollToBottom();
   }, [messages]);
 
-  const handleSend = async (content: string) => {
+  const handleSend = async (content: string, files?: File[]) => {
     const userMessage: Message = {
       id: `msg-${Date.now()}`,
       role: "user",
-      content,
+      content: files && files.length > 0 
+        ? `${content || ''}${content ? '\n\n' : ''}[${files.length} file(s) attached: ${files.map(f => f.name).join(', ')}]`
+        : content,
       timestamp: new Date(),
     };
 
@@ -64,6 +70,77 @@ export function ChatContainer() {
     setIsProcessing(true);
 
     try {
+      // Handle file uploads if present
+      if (files && files.length > 0) {
+        try {
+          const uploadResponse = await apiClient.uploadFiles(files);
+          
+          if (uploadResponse.success && uploadResponse.data) {
+            const fileInfo = uploadResponse.data.files
+              .map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`)
+              .join(', ');
+            
+            // Add file info to message content if not already included
+            if (!content.includes('[file')) {
+              content = `${content}\n\n[${files.length} file(s) uploaded: ${fileInfo}]`;
+            }
+            
+            // If files have extracted text, include it in the AI context
+            const extractedTexts = uploadResponse.data.files
+              .filter(f => f.extractedText)
+              .map(f => {
+                const metadata = f.metadata || {};
+                const metadataInfo = metadata.pages 
+                  ? ` (${metadata.pages} pages)`
+                  : metadata.rowCount 
+                  ? ` (${metadata.rowCount} rows)`
+                  : '';
+                return `\n\n--- Document: ${f.filename}${metadataInfo} ---\n${f.extractedText}`;
+              })
+              .join('\n\n');
+            
+            if (extractedTexts) {
+              content = `${content}\n\n[Document Content Extracted]${extractedTexts}`;
+            } else {
+              // If no text extracted, still mention the files
+              const fileList = uploadResponse.data.files
+                .map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`)
+                .join(', ');
+              content = `${content}\n\n[Files attached: ${fileList} - content extraction not available for this file type]`;
+            }
+            
+            console.log('Files uploaded successfully', { 
+              fileCount: files.length,
+              summary: uploadResponse.data.summary 
+            });
+          } else {
+            console.error('File upload failed', uploadResponse.error);
+            // Show error to user
+            const errorMessage: Message = {
+              id: `msg-${Date.now()}-upload-error`,
+              role: "assistant",
+              content: `Failed to upload files: ${uploadResponse.error?.message || 'Unknown error'}. Please try again.`,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, errorMessage]);
+            setIsProcessing(false);
+            return; // Don't continue with chat if upload fails
+          }
+        } catch (error: any) {
+          console.error('File upload error', error);
+          // Show error to user
+          const errorMessage: Message = {
+            id: `msg-${Date.now()}-upload-error`,
+            role: "assistant",
+            content: `Failed to upload files: ${error.message || 'Network error'}. Please check your connection and try again.`,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, errorMessage]);
+          setIsProcessing(false);
+          return; // Don't continue with chat if upload fails
+        }
+      }
+
       // Check if it's a workflow command
       const isWorkflowCommand = content.toLowerCase().includes("/workflow") || content.toLowerCase().includes("workflow");
       
@@ -82,13 +159,27 @@ export function ChatContainer() {
         const response = await apiClient.sendChatMessage(content);
         
         if (response.success && response.data) {
+          // Check if it's a placeholder response
+          const messageText = response.data.message || response.data.response || "";
+          const isPlaceholder = messageText.includes("To enable AI responses") || 
+                                messageText.includes("I received your message");
+          
+          if (isPlaceholder) {
+            console.warn("⚠️ Received placeholder response - API key may not be loaded");
+          }
+          
           const assistantMessage: Message = {
             id: `msg-${Date.now()}-assistant`,
             role: "assistant",
-            content: response.data.message || response.data.response || "I received your message and processed it successfully.",
+            content: messageText,
             timestamp: new Date(),
           };
           setMessages((prev) => [...prev, assistantMessage]);
+          
+          // Speak the response if TTS is enabled
+          if (ttsEnabled && messageText) {
+            speak(messageText);
+          }
         } else {
           // Fallback response if API fails or returns error
           const errorMsg = response.error?.message || "Unable to process your message. Please check your connection.";
@@ -167,7 +258,43 @@ export function ChatContainer() {
 
       {/* Input Area */}
       <div className="flex-shrink-0 p-4 pb-6 border-t border-border/30 bg-background/50 backdrop-blur-lg">
-        <ChatInput onSend={handleSend} disabled={isProcessing} />
+        <div className="relative">
+          <ChatInput 
+            onSend={handleSend} 
+            onVoiceTranscribe={(text) => {
+              // Auto-send transcribed text
+              handleSend(text);
+            }}
+            disabled={isProcessing} 
+          />
+          
+          {/* TTS Toggle Button */}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => {
+              if (isSpeaking) {
+                stopTTS();
+              }
+              setTtsEnabled(!ttsEnabled);
+            }}
+            className={cn(
+              "absolute top-2 right-2 p-2 rounded-lg transition-all",
+              ttsEnabled
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/50 text-muted-foreground hover:bg-muted"
+            )}
+            title={ttsEnabled ? "Disable text-to-speech" : "Enable text-to-speech"}
+          >
+            {isSpeaking ? (
+              <Volume2 className="w-4 h-4 animate-pulse" />
+            ) : ttsEnabled ? (
+              <Volume2 className="w-4 h-4" />
+            ) : (
+              <VolumeX className="w-4 h-4" />
+            )}
+          </motion.button>
+        </div>
       </div>
     </div>
   );
