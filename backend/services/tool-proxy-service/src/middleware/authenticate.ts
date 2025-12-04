@@ -4,7 +4,15 @@ import { UserModel } from '@uaol/shared/database/models/user';
 import { verifyToken, extractTokenFromHeader } from '@uaol/shared/auth/jwt';
 import { AuthenticationError } from '@uaol/shared/errors';
 
-const userModel = new UserModel(getDatabasePool());
+// Lazy initialization - don't create model until we actually need it
+let userModel: UserModel | null = null;
+
+function getUserModel(): UserModel {
+  if (!userModel) {
+    userModel = new UserModel(getDatabasePool());
+  }
+  return userModel;
+}
 
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
   try {
@@ -15,7 +23,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     }
 
     const payload = verifyToken(token);
-    const user = await userModel.findById(payload.userId);
+    const user = await getUserModel().findById(payload.userId);
 
     if (!user) {
       throw new AuthenticationError('User not found');

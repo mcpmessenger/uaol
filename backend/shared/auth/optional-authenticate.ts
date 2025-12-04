@@ -5,7 +5,15 @@ import { verifyToken, extractTokenFromHeader } from './jwt.js';
 import { AuthenticationError } from '../errors/index.js';
 import { randomUUID } from 'crypto';
 
-const userModel = new UserModel(getDatabasePool());
+// Lazy initialization - don't create model until we actually need it
+let userModel: UserModel | null = null;
+
+function getUserModel(): UserModel {
+  if (!userModel) {
+    userModel = new UserModel(getDatabasePool());
+  }
+  return userModel;
+}
 
 /**
  * Optional authentication middleware
@@ -25,7 +33,7 @@ export async function optionalAuthenticate(
     if (token) {
       try {
         const payload = verifyToken(token);
-        const user = await userModel.findById(payload.userId);
+        const user = await getUserModel().findById(payload.userId);
 
         if (!user) {
           throw new AuthenticationError('User not found');
@@ -43,18 +51,18 @@ export async function optionalAuthenticate(
     // No token or invalid token - create/get guest user
     const guestId = (req.headers['x-guest-id'] as string) || randomUUID();
     
-    let guest = await userModel.findGuestBySessionId(guestId);
+    let guest = await getUserModel().findGuestBySessionId(guestId);
 
     if (!guest) {
       // Create new guest user
-      guest = await userModel.createGuest(guestId);
+      guest = await getUserModel().createGuest(guestId);
     }
 
     // Check if guest has expired (24 hours)
     const expiresAt = guest.expires_at ? new Date(guest.expires_at) : null;
     if (expiresAt && expiresAt < new Date()) {
       // Guest expired - create new one
-      guest = await userModel.createGuest(guestId);
+      guest = await getUserModel().createGuest(guestId);
     }
 
     (req as any).user = guest;

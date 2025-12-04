@@ -7,8 +7,25 @@ import { ValidationError, InsufficientCreditsError } from '@uaol/shared/errors';
 import { createProducer } from '@uaol/shared/mq/queue';
 
 const logger = createLogger('job-orchestration-service');
-const jobModel = new ProcessingJobModel(getDatabasePool());
-const userModel = new UserModel(getDatabasePool());
+
+// Lazy initialization - don't create models until we actually need them
+let jobModel: ProcessingJobModel | null = null;
+let userModel: UserModel | null = null;
+
+function getJobModel(): ProcessingJobModel {
+  if (!jobModel) {
+    jobModel = new ProcessingJobModel(getDatabasePool());
+  }
+  return jobModel;
+}
+
+function getUserModel(): UserModel {
+  if (!userModel) {
+    userModel = new UserModel(getDatabasePool());
+  }
+  return userModel;
+}
+
 const producer = createProducer();
 
 export const jobController = {
@@ -44,7 +61,7 @@ export const jobController = {
       }
 
       // Create job
-      const job = await jobModel.create(user.user_id, workflow_definition as WorkflowDefinition);
+      const job = await getJobModel().create(user.user_id, workflow_definition as WorkflowDefinition);
 
       // Queue job for processing
       await producer.send({
@@ -72,7 +89,7 @@ export const jobController = {
       const user = (req as any).user;
       const { jobId } = req.params;
 
-      const job = await jobModel.findById(jobId);
+      const job = await getJobModel().findById(jobId);
 
       if (!job) {
         return res.status(404).json({
@@ -102,7 +119,7 @@ export const jobController = {
       const user = (req as any).user;
       const { limit = 50 } = req.query;
 
-      const jobs = await jobModel.findByUser(user.user_id, Number(limit));
+      const jobs = await getJobModel().findByUser(user.user_id, Number(limit));
 
       res.json({
         success: true,
@@ -118,7 +135,7 @@ export const jobController = {
       const user = (req as any).user;
       const { jobId } = req.params;
 
-      const job = await jobModel.findById(jobId);
+      const job = await getJobModel().findById(jobId);
 
       if (!job) {
         return res.status(404).json({

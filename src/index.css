@@ -8,7 +8,64 @@
 
 @layer base {
   :root {
-    /* Glacier/Obsidian Color Palette */
+    /* Light Mode - Glacier/Obsidian Aesthetic */
+    --background: 210 40% 98%;
+    --background-deep: 210 30% 95%;
+    --foreground: 230 40% 6%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 230 40% 6%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 40% 6%;
+
+    /* Subtle Orange - Primary Accent (Light Mode) */
+    --primary: 32 100% 55%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 32 100% 65%;
+    --primary-gradient-end: 32 80% 70%;
+
+    /* Surface Glass */
+    --secondary: 210 20% 96%;
+    --secondary-foreground: 230 40% 6%;
+
+    --muted: 210 15% 92%;
+    --muted-foreground: 215 20% 45%;
+
+    --accent: 32 100% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 20% 90%;
+    --input: 210 20% 94%;
+    --ring: 32 100% 55%;
+
+    --radius: 0.75rem;
+
+    /* Glass Panel Variables */
+    --glass-bg: 0 0% 100%;
+    --glass-border: 210 20% 88%;
+    --glass-blur: 12px;
+
+    /* Aurora Glow */
+    --aurora-glow: 0 0 30px hsl(32 100% 55% / 0.3), 0 0 60px hsl(32 100% 55% / 0.15);
+    --aurora-glow-intense: 0 0 40px hsl(32 100% 55% / 0.4), 0 0 80px hsl(32 100% 55% / 0.2);
+
+    /* Sidebar */
+    --sidebar-background: 210 30% 98%;
+    --sidebar-foreground: 230 40% 6%;
+    --sidebar-primary: 32 100% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 20% 94%;
+    --sidebar-accent-foreground: 230 40% 6%;
+    --sidebar-border: 210 20% 90%;
+    --sidebar-ring: 32 100% 55%;
+  }
+
+  .dark {
+    /* Dark Mode - Glacier/Obsidian Color Palette */
     --background: 230 40% 6%;
     --background-deep: 230 45% 4%;
     --foreground: 210 40% 98%;
@@ -23,6 +80,7 @@
     --primary: 191 100% 50%;
     --primary-foreground: 230 40% 6%;
     --primary-glow: 191 100% 60%;
+    --primary-gradient-end: 191 80% 70%;
 
     /* Surface Glass */
     --secondary: 228 30% 15%;
@@ -40,8 +98,6 @@
     --border: 228 25% 20%;
     --input: 228 25% 18%;
     --ring: 191 100% 50%;
-
-    --radius: 0.75rem;
 
     /* Glass Panel Variables */
     --glass-bg: 228 30% 14%;
@@ -61,11 +117,6 @@
     --sidebar-accent-foreground: 210 40% 98%;
     --sidebar-border: 228 25% 20%;
     --sidebar-ring: 191 100% 50%;
-  }
-
-  .dark {
-    --background: 230 40% 6%;
-    --foreground: 210 40% 98%;
   }
 }
 
@@ -147,7 +198,7 @@
   /* Gradient text */
   .gradient-text {
     @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(191 80% 70%) 100%);
+    background-image: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--primary-gradient-end)) 100%);
   }
 
   /* Subtle grid background */

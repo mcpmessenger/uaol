@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js 20+ and npm
-- PostgreSQL 15+ (or Docker)
+- Database: **CockroachDB** (recommended for production), Supabase, or PostgreSQL 15+ (or Docker)
 - Redis (or Docker)
 - Docker & Docker Compose (optional, for full stack)
 
@@ -28,7 +28,14 @@ Edit `.env` with your configuration values.
 
 ### 3. Set Up Database
 
-#### Option A: Using Docker (Recommended)
+**Recommended for Production: CockroachDB Cloud**
+- See [COCKROACHDB_SETUP.md](./COCKROACHDB_SETUP.md) for detailed setup
+- CockroachDB provides strong consistency, high availability, and operational simplicity
+- Free tier available at [cockroachlabs.cloud](https://cockroachlabs.cloud)
+
+**For Development: Supabase or Local PostgreSQL**
+
+#### Option A: Using Docker (Recommended for Local Development)
 
 ```bash
 # Start PostgreSQL and Redis
@@ -38,7 +45,30 @@ docker-compose up -d postgres redis
 npm run migrate
 ```
 
-#### Option B: Using Local Services
+#### Option B: Using CockroachDB Cloud (Recommended for Production)
+
+1. Create a CockroachDB Cloud account at [cockroachlabs.cloud](https://cockroachlabs.cloud)
+2. Create a cluster and get your connection string
+3. Update `DATABASE_URL` in `.env`:
+   ```env
+   DATABASE_URL=postgresql://[user]:[password]@[host]:26257/[database]?sslmode=require
+   ```
+4. Run migrations:
+```bash
+npm run migrate
+```
+
+#### Option C: Using Supabase (Development)
+
+1. Create a Supabase project at [supabase.com](https://supabase.com)
+2. Get your connection string from Settings → Database
+3. Update `DATABASE_URL` in `.env`
+4. Run migrations:
+```bash
+npm run migrate
+```
+
+#### Option D: Using Local Services
 
 1. Start PostgreSQL and Redis locally
 2. Update `DATABASE_URL` and `REDIS_URL` in `.env`
@@ -46,6 +76,8 @@ npm run migrate
 ```bash
 npm run migrate
 ```
+
+**See [DATABASE_SETUP.md](./DATABASE_SETUP.md) for detailed database setup instructions.**
 
 ### 4. Start Services
 
@@ -210,9 +242,11 @@ backend/
 
 ### Database Connection Issues
 
-- Ensure PostgreSQL is running
+- Ensure your database is running (PostgreSQL, CockroachDB, or Supabase)
 - Check `DATABASE_URL` in `.env`
-- Verify database exists: `psql -U uaol -d uaol`
+- For PostgreSQL: Verify database exists: `psql -U uaol -d uaol`
+- For CockroachDB Cloud: Ensure SSL is enabled (`?sslmode=require`)
+- See [DATABASE_SETUP.md](./DATABASE_SETUP.md) for troubleshooting
 
 ### Port Already in Use
 

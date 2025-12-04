@@ -1,6 +1,22 @@
 # Database Setup Guide
 
-## Supabase vs PostgreSQL
+## Database Options
+
+UAOL supports multiple database options. **CockroachDB is the primary recommendation for production** due to its operational simplicity, strong consistency guarantees, and high availability.
+
+### 🏆 CockroachDB (Primary Recommendation for Production)
+
+CockroachDB is a cloud-native, distributed SQL database built for global scale and resilience.
+
+**Why CockroachDB?**
+- ✅ **Operational Simplicity**: Self-healing and requires minimal operational overhead, which is a significant advantage for a microservices team focused on feature development
+- ✅ **Strong Consistency**: Serializable isolation - the highest level of transactional consistency, which is paramount for the Billing Service
+- ✅ **High Availability**: Automatic replication across nodes and zones, providing built-in fault tolerance and instant recovery from node failures
+- ✅ **PostgreSQL Wire-Protocol Compatibility**: Compatible with the PostgreSQL wire protocol and most SQL syntax, making the transition from Supabase straightforward
+
+**See [COCKROACHDB_SETUP.md](./COCKROACHDB_SETUP.md) for detailed setup instructions.**
+
+### Supabase (Recommended for Development)
 
 **Good news:** Supabase is built on PostgreSQL, so it's **100% compatible** with this backend! You can use either option.
 
@@ -141,6 +157,7 @@ node -e "import('pg').then(pg => { const pool = new pg.Pool({connectionString: p
 ## Schema Compatibility
 
 The schema uses standard PostgreSQL features that work with:
+- ✅ **CockroachDB** (Recommended for Production)
 - ✅ Supabase
 - ✅ Local PostgreSQL
 - ✅ Neon
@@ -149,7 +166,7 @@ The schema uses standard PostgreSQL features that work with:
 - ✅ AWS RDS PostgreSQL
 - ✅ Google Cloud SQL
 
-**Note:** The schema uses `uuid-ossp` extension which is available in all modern PostgreSQL installations including Supabase.
+**Note:** The schema uses `gen_random_uuid()` which is available in both PostgreSQL 13+ and CockroachDB. For older PostgreSQL versions, it falls back to `uuid-ossp` extension.
 
 ## Troubleshooting
 
@@ -176,5 +193,9 @@ DATABASE_URL=postgresql://...?sslmode=require
 ## Recommendation
 
 **For Development:** Use Supabase - it's the fastest way to get started
-**For Production:** Use managed PostgreSQL (Supabase Pro, AWS RDS, etc.) or your own PostgreSQL server
+**For Production:** Use **CockroachDB Cloud** (Primary Recommendation) - provides the best balance of operational simplicity, strong consistency guarantees (serializable isolation), and high availability. See [COCKROACHDB_SETUP.md](./COCKROACHDB_SETUP.md) for setup.
+
+**Alternative Production Options:**
+- Managed PostgreSQL (Supabase Pro, AWS RDS, etc.)
+- Self-hosted PostgreSQL server
 

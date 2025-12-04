@@ -1,6 +1,23 @@
 version: '3.8'
 
 services:
+  # CockroachDB (Recommended for Production)
+  cockroachdb:
+    image: cockroachdb/cockroach:latest
+    container_name: uaol-cockroachdb
+    command: start-single-node --insecure
+    ports:
+      - "26257:26257"  # SQL port
+      - "8080:8080"    # Admin UI
+    volumes:
+      - cockroachdb_data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL (Alternative - for development)
   postgres:
     image: postgres:15-alpine
     container_name: uaol-postgres
@@ -159,6 +176,7 @@ services:
         condition: service_healthy
 
 volumes:
+  cockroachdb_data:
   postgres_data:
   redis_data:
 

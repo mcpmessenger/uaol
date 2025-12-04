@@ -9,13 +9,41 @@ const __dirname = dirname(__filename);
 
 // Load .env from backend directory (2 levels up from shared/config)
 const envPath = resolve(__dirname, '../../.env');
-dotenv.config({ path: envPath });
+console.log('[Config] Loading .env from:', envPath);
 
+const envResult = dotenv.config({ path: envPath });
+
+if (envResult.error) {
+  console.error('[Config] ERROR loading .env:', envResult.error);
+} else {
+  console.log('[Config] .env file loaded successfully');
+}
+
+// Debug: Log if DATABASE_URL is loaded
+if (!process.env.DATABASE_URL) {
+  console.warn('[Config] ⚠️  WARNING: DATABASE_URL not found in environment variables');
+  console.warn('[Config] .env path:', envPath);
+  console.warn('[Config] Using default localhost connection (this will likely fail)');
+  console.warn('[Config] Available env vars:', Object.keys(process.env).filter(k => k.includes('DATABASE')).join(', '));
+} else {
+  const urlForLogging = process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@');
+  console.log('[Config] ✅ DATABASE_URL loaded:', urlForLogging.substring(0, 80) + '...');
+}
+
+// Use getters to read from process.env dynamically (not cached)
 export const config = {
-  database: {
-    url: process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/uaol',
-    poolMin: parseInt(process.env.DATABASE_POOL_MIN || '2', 10),
-    poolMax: parseInt(process.env.DATABASE_POOL_MAX || '10000', 10),
+  get database() {
+    const url = process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/uaol';
+    // Debug: Log when getter is accessed (only for localhost to avoid spam)
+    if (url.includes('localhost') || url.includes('127.0.0.1')) {
+      console.log('[Config] database.url getter accessed - returning localhost');
+      console.log('[Config] process.env.DATABASE_URL:', process.env.DATABASE_URL ? 'SET' : 'NOT SET');
+    }
+    return {
+      url: url,
+      poolMin: parseInt(process.env.DATABASE_POOL_MIN || '2', 10),
+      poolMax: parseInt(process.env.DATABASE_POOL_MAX || '10000', 10),
+    };
   },
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',

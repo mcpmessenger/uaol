@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
-import { Settings, Bell, Workflow, Moon, User } from "lucide-react";
+import { Workflow, Moon, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import logo from "@/assets/logo.png";
 
 export function Header() {
@@ -48,20 +49,7 @@ export function Header() {
           transition={{ delay: 0.2 }}
           className="flex items-center gap-2"
         >
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Bell className="w-5 h-5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Settings className="w-5 h-5" />
-          </Button>
+          <ThemeToggle />
           <div className="ml-2 w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
             <User className="w-5 h-5 text-primary" />
           </div>

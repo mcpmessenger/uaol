@@ -3,7 +3,8 @@ import { motion } from "framer-motion";
 import { ChatMessage, Message } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { WorkflowResultCard, WorkflowResult } from "./WorkflowResultCard";
-import { Sparkles, Volume2, VolumeX } from "lucide-react";
+import { Volume2, VolumeX } from "lucide-react";
+import logo from "@/assets/logo.png";
 import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api/client";
 import { useTextToSpeech } from "@/hooks/use-text-to-speech";
@@ -223,8 +224,8 @@ export function ChatContainer() {
               animate={{ opacity: 1, y: 0 }}
               className="flex gap-4"
             >
-              <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-primary" />
+              <div className="flex-shrink-0 flex items-center justify-center">
+                <img src={logo} alt="UAOL Logo" className="w-10 h-10 object-contain" />
               </div>
               <div className="flex-1 max-w-[75%]">
                 <WorkflowResultCard
@@ -241,8 +242,8 @@ export function ChatContainer() {
               animate={{ opacity: 1 }}
               className="flex gap-4"
             >
-              <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-primary animate-pulse" />
+              <div className="flex-shrink-0 flex items-center justify-center">
+                <img src={logo} alt="UAOL Logo" className="w-10 h-10 object-contain animate-pulse" />
               </div>
               <div className="glass-panel px-5 py-4">
                 <div className="flex gap-1.5">

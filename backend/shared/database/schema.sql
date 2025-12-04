@@ -1,12 +1,21 @@
 -- UAOL Database Schema
 -- Supports PostgreSQL, CockroachDB, and PlanetScale
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Enable UUID extension (PostgreSQL only - CockroachDB has gen_random_uuid() built-in)
+-- CockroachDB uses gen_random_uuid() which is also available in PostgreSQL 13+
+DO $$
+BEGIN
+    -- Try to create extension (will fail silently on CockroachDB, which is fine)
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Extension creation failed (likely CockroachDB) - this is OK
+        NULL;
+END $$;
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
-    user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE NOT NULL,
     current_credits BIGINT NOT NULL DEFAULT 0,
     subscription_tier TEXT NOT NULL DEFAULT 'Free' CHECK (subscription_tier IN ('Free', 'Pro', 'Enterprise')),
@@ -17,7 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- MCP Tools table (Tool Registry)
 CREATE TABLE IF NOT EXISTS mcp_tools (
-    tool_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tool_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     gateway_url TEXT NOT NULL,
     credit_cost_per_call INTEGER NOT NULL DEFAULT 1,
@@ -29,7 +38,7 @@ CREATE TABLE IF NOT EXISTS mcp_tools (
 
 -- Processing Jobs table (Job Orchestration)
 CREATE TABLE IF NOT EXISTS processing_jobs (
-    job_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     workflow_definition JSONB NOT NULL,
     status TEXT NOT NULL DEFAULT 'Queued' CHECK (status IN ('Queued', 'Running', 'Success', 'Failed', 'Retrying')),

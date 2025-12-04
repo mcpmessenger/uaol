@@ -111,7 +111,7 @@ app.use((req, res, next) => {
 // Uses optional auth: works for both authenticated users and guests
 app.post('/chat', optionalAuthenticate, async (req, res) => {
   try {
-    const { message } = req.body;
+    const { message, fileId } = req.body;
     
     if (!message) {
       return res.status(400).json({
@@ -123,7 +123,10 @@ app.post('/chat', optionalAuthenticate, async (req, res) => {
       });
     }
 
-    logger.info('Chat message received', { message: message.substring(0, 100) });
+    logger.info('Chat message received', { 
+      message: message.substring(0, 100),
+      fileId: fileId || 'none'
+    });
     
     // Get OpenAI API key - check process.env directly (most reliable)
     const openaiApiKey = process.env.OPENAI_API_KEY || '';
@@ -147,6 +150,43 @@ app.post('/chat', optionalAuthenticate, async (req, res) => {
       });
     }
 
+    // RAG Step: Retrieve context from vector store if fileId is provided
+    let context = '';
+    if (fileId) {
+      try {
+        const { queryVectorStore } = await import('@uaol/shared/vector-store/vector-store');
+        const retrievedChunks = await queryVectorStore(message, fileId, 5);
+        
+        if (retrievedChunks.length > 0) {
+          // Format the retrieved context for the LLM
+          context = `--- CONTEXT FROM USER DOCUMENT (File ID: ${fileId}) ---
+${retrievedChunks.join('\n\n---\n\n')}
+--- END CONTEXT ---
+
+`;
+          logger.info('RAG context retrieved', { 
+            fileId, 
+            chunkCount: retrievedChunks.length 
+          });
+        } else {
+          logger.info('No RAG context found for file', { fileId });
+        }
+      } catch (ragError: any) {
+        logger.warn('RAG retrieval failed', { 
+          error: ragError.message, 
+          fileId 
+        });
+        // Continue without RAG context if retrieval fails
+      }
+    }
+
+    // Construct the final prompt for the LLM
+    const systemPrompt = `You are UAOL (Universal AI Orchestration Layer), an AI assistant that helps users execute complex workflows, analyze data, and orchestrate AI tools. When users upload documents, you have access to the extracted text content. Analyze documents thoroughly, summarize key points, answer questions about the content, and provide insights. Be helpful, concise, and professional.
+
+${context ? 'Use the provided CONTEXT from the user\'s document to answer their question. If the context does not contain the answer, state that you cannot find the information in the provided document.' : ''}`;
+
+    const finalUserMessage = context ? `${context}User Question: ${message}` : message;
+
     // Call OpenAI API
     try {
       const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -157,16 +197,16 @@ app.post('/chat', optionalAuthenticate, async (req, res) => {
         },
         body: JSON.stringify({
           model: openaiModel,
-                  messages: [
-                    {
-                      role: 'system',
-                      content: 'You are UAOL (Universal AI Orchestration Layer), an AI assistant that helps users execute complex workflows, analyze data, and orchestrate AI tools. When users upload documents, you have access to the extracted text content. Analyze documents thoroughly, summarize key points, answer questions about the content, and provide insights. Be helpful, concise, and professional.',
-                    },
-                    {
-                      role: 'user',
-                      content: message,
-                    },
-                  ],
+          messages: [
+            {
+              role: 'system',
+              content: systemPrompt,
+            },
+            {
+              role: 'user',
+              content: finalUserMessage,
+            },
+          ],
           temperature: 0.7,
           max_tokens: 2000, // Increased for document analysis
         }),

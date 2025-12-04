@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Slash, Workflow, Bot, Quote, Settings, Sparkles, Mic, MicOff, Volume2, Paperclip, X } from "lucide-react";
+import { Send, Slash, Workflow, Bot, Quote, Settings, Mic, MicOff, Volume2, Paperclip, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/GlassPanel";
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder";

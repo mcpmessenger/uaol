@@ -15,7 +15,7 @@ A comprehensive microservices platform for orchestrating AI workflows, managing 
 
 - **Node.js** 20.x or higher
 - **npm** 9.x or higher
-- **PostgreSQL** (or Supabase account)
+- **Database**: CockroachDB (recommended for production), Supabase, or PostgreSQL
 - **OpenAI API Key** (for AI chat functionality)
 
 ## 🏗️ Architecture
@@ -58,25 +58,44 @@ npm install
 cp env.example .env
 
 # Edit .env and set your configuration:
-# - DATABASE_URL (Supabase or PostgreSQL connection string)
+# - DATABASE_URL (CockroachDB, Supabase, or PostgreSQL connection string)
 # - OPENAI_API_KEY (your OpenAI API key)
 # - JWT_SECRET (generate a secure random string)
 ```
 
 #### Database Setup
 
-**Option A: Supabase (Recommended for Development)**
+**Option A: CockroachDB (Primary Recommendation for Production)**
+
+CockroachDB is a cloud-native, distributed SQL database built for global scale and resilience. It is the **recommended database** for UAOL production deployments.
+
+**Why CockroachDB?**
+- ✅ **Operational Simplicity**: Self-healing and requires minimal operational overhead, allowing the team to focus on feature development
+- ✅ **Strong Consistency**: Serializable isolation - the highest level of transactional consistency, critical for the Billing Service
+- ✅ **High Availability**: Automatic replication across nodes and zones with built-in fault tolerance and instant recovery from node failures
+- ✅ **PostgreSQL Wire-Protocol Compatibility**: Compatible with PostgreSQL wire protocol and most SQL syntax, making migration from Supabase straightforward
+
+1. Create a CockroachDB Cloud account at https://cockroachlabs.cloud (free tier available)
+2. Create a cluster and get your connection string from the **Connect** button
+3. Add to `backend/.env`: `DATABASE_URL=postgresql://[user]:[password]@[host]:26257/[database]?sslmode=require`
+
+**Note**: `DATABASE_URL` goes in the **backend** `.env` file, not the frontend. The frontend never connects directly to the database.
+
+See [COCKROACHDB_SETUP.md](backend/COCKROACHDB_SETUP.md) for detailed setup instructions.
+See [GET_COCKROACHDB_CREDENTIALS.md](backend/GET_COCKROACHDB_CREDENTIALS.md) for help getting your username and password.
+
+**Option B: Supabase (Recommended for Development)**
 
 1. Create a Supabase project at https://supabase.com
 2. Get your connection string from Settings → Database → Connection string
 3. Use the "Session Pooler" connection string (IPv4 compatible)
-4. Add to `.env`: `DATABASE_URL=postgresql://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres`
+4. Add to `backend/.env`: `DATABASE_URL=postgresql://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres`
 
-**Option B: Local PostgreSQL**
+**Option C: Local PostgreSQL**
 
 1. Install PostgreSQL locally
 2. Create database: `createdb uaol`
-3. Add to `.env`: `DATABASE_URL=postgresql://user:password@localhost:5432/uaol`
+3. Add to `backend/.env`: `DATABASE_URL=postgresql://user:password@localhost:5432/uaol`
 
 #### Run Database Migrations
 
@@ -147,7 +166,7 @@ uaol/
 
 See `backend/env.example` for all available options. Key variables:
 
-- `DATABASE_URL`: PostgreSQL connection string
+- `DATABASE_URL`: Database connection string (CockroachDB, Supabase, or PostgreSQL)
 - `OPENAI_API_KEY`: OpenAI API key for chat functionality
 - `JWT_SECRET`: Secret for JWT token signing
 - `API_GATEWAY_PORT`: Port for API Gateway (default: 3000)
@@ -215,7 +234,7 @@ This project is licensed under the MIT License.
 ## 🙏 Acknowledgments
 
 - Built with [Lovable](https://lovable.dev)
-- Uses [Supabase](https://supabase.com) for database hosting
+- **Database**: Supports CockroachDB (recommended for production), Supabase, and PostgreSQL
 - [OpenAI](https://openai.com) for AI capabilities
 
 ## 📞 Support

@@ -1,7 +1,8 @@
 import { motion } from "framer-motion";
 import { GlassPanel } from "@/components/ui/GlassPanel";
-import { Bot, User, Sparkles } from "lucide-react";
+import { Bot, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import logo from "@/assets/logo.png";
 
 export interface Message {
   id: string;
@@ -27,8 +28,8 @@ export function ChatMessage({ message, index }: ChatMessageProps) {
       className={cn("flex gap-4 w-full", isUser ? "justify-end" : "justify-start")}
     >
       {!isUser && (
-        <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-          <Sparkles className="w-5 h-5 text-primary" />
+        <div className="flex-shrink-0 flex items-center justify-center">
+          <img src={logo} alt="UAOL Logo" className="w-10 h-10 object-contain" />
         </div>
       )}
 
