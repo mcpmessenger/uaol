@@ -61,11 +61,12 @@ If you still see this error after restarting:
 
 2. **Verify the key format**: Open `backend/.env` and check:
    ```env
-   OPENAI_API_KEY=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
+   OPENAI_API_KEY=sk-proj-your-actual-key-here
    ```
    - No quotes around the key
    - No spaces before/after the `=`
    - Entire key on one line
+   - Replace `your-actual-key-here` with your actual API key from https://platform.openai.com/api-keys
 
 3. **Test the key directly**:
    ```powershell
