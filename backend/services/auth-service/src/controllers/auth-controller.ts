@@ -5,19 +5,131 @@ import { generateToken, verifyToken, extractTokenFromHeader } from '@uaol/shared
 import { createLogger } from '@uaol/shared/logger';
 import { AuthenticationError, ValidationError } from '@uaol/shared/errors';
 import { config } from '@uaol/shared/config';
+import {
+  handleOAuthCallback,
+  exchangeGoogleCode,
+  getGoogleUserInfo,
+  exchangeOutlookCode,
+  getOutlookUserInfo,
+  exchangeIcloudCode,
+  getIcloudUserInfo,
+} from './oauth-handlers';
 
 const logger = createLogger('auth-service');
 const userModel = new UserModel(getDatabasePool());
 
+// Helper function to get OAuth config - prioritizes process.env directly since we know those values are set
+function getGoogleOAuthConfig() {
+  // Scopes are static - define them directly here
+  const scopes = [
+    'openid',
+    'email',
+    'profile',
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/calendar.readonly',
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/drive.readonly',
+  ];
+  
+  return {
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback',
+    scopes: scopes,
+  };
+}
+
 export const authController = {
   async initiateGoogleOAuth(req: Request, res: Response, next: NextFunction) {
     try {
-      // TODO: Implement Google OAuth flow
+      // Read directly from process.env (we know these are set correctly)
+      const googleConfig = getGoogleOAuthConfig();
+      
+      logger.info('Checking Google OAuth configuration', {
+        hasClientId: !!googleConfig.clientId,
+        clientIdLength: googleConfig.clientId?.length || 0,
+        hasClientSecret: !!googleConfig.clientSecret,
+        clientSecretLength: googleConfig.clientSecret?.length || 0,
+        redirectUri: googleConfig.redirectUri,
+      });
+
+      if (!googleConfig.clientId || googleConfig.clientId.trim() === '') {
+        logger.error('Google OAuth not configured: GOOGLE_CLIENT_ID is missing or empty', {
+          envValue: process.env.GOOGLE_CLIENT_ID ? `SET (${process.env.GOOGLE_CLIENT_ID.length} chars)` : 'NOT SET',
+        });
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'OAUTH_NOT_CONFIGURED',
+            message: 'Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend/.env',
+          },
+        });
+      }
+      
+      if (!googleConfig.clientSecret || googleConfig.clientSecret.trim() === '') {
+        logger.error('Google OAuth not configured: GOOGLE_CLIENT_SECRET is missing or empty');
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'OAUTH_NOT_CONFIGURED',
+            message: 'Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend/.env',
+          },
+        });
+      }
+      const state = Buffer.from(JSON.stringify({ provider: 'google' })).toString('base64');
+      const scopes = googleConfig.scopes.join(' ');
+      
+      logger.info('Initiating Google OAuth', {
+        clientId: googleConfig.clientId.substring(0, 10) + '...',
+        redirectUri: googleConfig.redirectUri,
+      });
+      
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-        `client_id=${config.oauth.google.clientId}&` +
-        `redirect_uri=${config.oauth.google.redirectUri}&` +
+        `client_id=${googleConfig.clientId}&` +
+        `redirect_uri=${encodeURIComponent(googleConfig.redirectUri)}&` +
         `response_type=code&` +
-        `scope=openid email profile`;
+        `scope=${encodeURIComponent(scopes)}&` +
+        `access_type=offline&` +
+        `prompt=consent&` +
+        `state=${state}`;
+      
+      res.redirect(authUrl);
+    } catch (error: any) {
+      logger.error('Google OAuth initiation error', { error: error.message });
+      next(error);
+    }
+  },
+
+  async handleGoogleCallback(req: Request, res: Response, next: NextFunction) {
+    try {
+      // Use the same scopes as in the initiation
+      const googleConfig = getGoogleOAuthConfig();
+      await handleOAuthCallback(
+        req,
+        res,
+        'google',
+        exchangeGoogleCode,
+        getGoogleUserInfo,
+        googleConfig.scopes
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async initiateOutlookOAuth(req: Request, res: Response, next: NextFunction) {
+    try {
+      const state = Buffer.from(JSON.stringify({ provider: 'outlook' })).toString('base64');
+      const scopes = config.oauth.outlook.scopes.join(' ');
+      
+      const authUrl = `https://login.microsoftonline.com/${config.oauth.outlook.tenant}/oauth2/v2.0/authorize?` +
+        `client_id=${config.oauth.outlook.clientId}&` +
+        `response_type=code&` +
+        `redirect_uri=${encodeURIComponent(config.oauth.outlook.redirectUri)}&` +
+        `response_mode=query&` +
+        `scope=${encodeURIComponent(scopes)}&` +
+        `state=${state}`;
       
       res.redirect(authUrl);
     } catch (error) {
@@ -25,23 +137,75 @@ export const authController = {
     }
   },
 
-  async handleGoogleCallback(req: Request, res: Response, next: NextFunction) {
+  async handleOutlookCallback(req: Request, res: Response, next: NextFunction) {
     try {
-      const { code } = req.query;
+      await handleOAuthCallback(
+        req,
+        res,
+        'outlook',
+        exchangeOutlookCode,
+        getOutlookUserInfo,
+        config.oauth.outlook.scopes
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async initiateIcloudOAuth(req: Request, res: Response, next: NextFunction) {
+    try {
+      const state = Buffer.from(JSON.stringify({ provider: 'icloud' })).toString('base64');
+      const scopes = config.oauth.icloud.scopes.join(' ');
       
-      if (!code) {
+      // iCloud uses Sign in with Apple
+      const authUrl = `https://appleid.apple.com/auth/authorize?` +
+        `client_id=${config.oauth.icloud.clientId}&` +
+        `redirect_uri=${encodeURIComponent(config.oauth.icloud.redirectUri)}&` +
+        `response_type=code id_token&` +
+        `scope=${encodeURIComponent(scopes)}&` +
+        `response_mode=form_post&` +
+        `state=${state}`;
+      
+      res.redirect(authUrl);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async handleIcloudCallback(req: Request, res: Response, next: NextFunction) {
+    try {
+      // Apple uses POST for callback, so we need to handle it differently
+      const { code, id_token, error } = req.body || req.query;
+
+      if (error) {
+        throw new AuthenticationError(`OAuth error: ${error}`);
+      }
+
+      if (!code || typeof code !== 'string') {
         throw new AuthenticationError('Missing authorization code');
       }
 
-      // TODO: Exchange code for token, get user info
-      // For now, create a mock user
-      const email = 'user@example.com'; // Get from Google
-      
-      let user = await userModel.findByEmail(email);
-      
-      if (!user) {
-        user = await userModel.create(email);
+      const tokenResponse = await exchangeIcloudCode(code);
+      const userInfo = await getIcloudUserInfo(tokenResponse.access_token, id_token || tokenResponse.id_token);
+
+      if (!userInfo || !userInfo.email) {
+        throw new AuthenticationError('Failed to retrieve user email');
       }
+
+      let user = await userModel.findByEmail(userInfo.email);
+      if (!user) {
+        user = await userModel.create(userInfo.email);
+      }
+
+      const { storeOAuthTokens } = await import('./oauth-handlers');
+      await storeOAuthTokens(
+        user.user_id,
+        'icloud',
+        tokenResponse.access_token,
+        tokenResponse.refresh_token || null,
+        tokenResponse.expires_in || null,
+        config.oauth.icloud.scopes
+      );
 
       const token = generateToken({
         userId: user.user_id,
@@ -49,17 +213,8 @@ export const authController = {
         subscriptionTier: user.subscription_tier,
       });
 
-      res.json({
-        success: true,
-        data: {
-          token,
-          user: {
-            id: user.user_id,
-            email: user.email,
-            subscriptionTier: user.subscription_tier,
-          },
-        },
-      });
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:8080';
+      res.redirect(`${frontendUrl}/auth/callback?token=${token}&provider=icloud`);
     } catch (error) {
       next(error);
     }

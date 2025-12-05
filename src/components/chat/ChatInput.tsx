@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Slash, Workflow, Bot, Quote, Settings, Mic, MicOff, Volume2, Paperclip, X } from "lucide-react";
+import { Send, Slash, Workflow, Bot, Quote, Settings, Mic, MicOff, Volume2, Paperclip, X, Key, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/GlassPanel";
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
@@ -15,16 +15,23 @@ const commands: Command[] = [
   { name: "workflow", description: "Open workflow builder", icon: Workflow },
   { name: "model", description: "Select AI model", icon: Bot },
   { name: "quote", description: "Quote a message", icon: Quote },
-  { name: "settings", description: "Open settings", icon: Settings },
+  { name: "settings", description: "Open API key settings", icon: Settings },
+  { name: "register", description: "Register with email", icon: User },
+  { name: "login", description: "Login with email", icon: User },
+  { name: "setkey", description: "Set API key", icon: Key },
+  { name: "keys", description: "View API keys", icon: Key },
+  { name: "default", description: "Set default provider", icon: Bot },
+  { name: "provider", description: "Use provider for next message", icon: Bot },
 ];
 
 interface ChatInputProps {
-  onSend: (message: string, files?: File[]) => void;
+  onSend: (message: string, files?: File[], provider?: 'openai' | 'gemini' | 'claude') => void;
   onVoiceTranscribe?: (text: string) => void;
   disabled?: boolean;
+  onOpenSettings?: () => void;
 }
 
-export function ChatInput({ onSend, onVoiceTranscribe, disabled }: ChatInputProps) {
+export function ChatInput({ onSend, onVoiceTranscribe, disabled, onOpenSettings }: ChatInputProps) {
   const [input, setInput] = useState("");
   const [showCommands, setShowCommands] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState(0);
@@ -51,12 +58,155 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled }: ChatInputProp
 
   const handleSubmit = () => {
     if ((!input.trim() && selectedFiles.length === 0) || disabled) return;
-    onSend(input.trim(), selectedFiles.length > 0 ? selectedFiles : undefined);
+    
+    // Handle authentication commands
+    const trimmed = input.trim();
+    if (trimmed.startsWith('/register ')) {
+      const email = trimmed.substring('/register '.length).trim();
+      if (email) {
+        handleRegister(email);
+        setInput('');
+        return;
+      } else {
+        alert('Usage: /register your@email.com');
+        return;
+      }
+    } else if (trimmed.startsWith('/login ')) {
+      const parts = trimmed.substring('/login '.length).trim().split(' ');
+      const email = parts[0];
+      if (email) {
+        handleLogin(email);
+        setInput('');
+        return;
+      } else {
+        alert('Usage: /login your@email.com');
+        return;
+      }
+    }
+    
+    // Handle API key commands
+    if (trimmed.startsWith('/setkey ')) {
+      const parts = trimmed.split(' ');
+      if (parts.length >= 3) {
+        const provider = parts[1] as 'openai' | 'gemini' | 'claude';
+        const apiKey = parts.slice(2).join(' ');
+        if (['openai', 'gemini', 'claude'].includes(provider)) {
+          handleSetKey(provider, apiKey);
+          setInput('');
+          return;
+        }
+      }
+    } else if (trimmed === '/keys') {
+      handleListKeys();
+      setInput('');
+      return;
+    } else if (trimmed.startsWith('/default ')) {
+      const parts = trimmed.split(' ');
+      if (parts.length === 2 && ['openai', 'gemini', 'claude'].includes(parts[1])) {
+        handleSetDefault(parts[1] as 'openai' | 'gemini' | 'claude');
+        setInput('');
+        return;
+      }
+    }
+    
+    // Extract provider from /provider command
+    let provider: 'openai' | 'gemini' | 'claude' | undefined;
+    let message = trimmed;
+    if (trimmed.startsWith('/provider ')) {
+      const parts = trimmed.split(' ');
+      if (parts.length >= 2 && ['openai', 'gemini', 'claude'].includes(parts[1])) {
+        provider = parts[1] as 'openai' | 'gemini' | 'claude';
+        message = parts.slice(2).join(' ');
+      }
+    }
+    
+    onSend(message, selectedFiles.length > 0 ? selectedFiles : undefined, provider);
     setInput("");
     setSelectedFiles([]);
     setShowCommands(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRegister = async (email: string) => {
+    try {
+      const { apiClient } = await import('@/lib/api/client');
+      const response = await apiClient.register(email);
+      if (response.success && response.data) {
+        apiClient.setToken(response.data.token);
+        alert(`✅ Registration successful!\n\nYour API key: ${response.data.apiKey}\n\nYou can now set your AI provider API keys using /settings or /setkey commands.`);
+        // Refresh the page to update auth state
+        window.location.reload();
+      } else {
+        alert(`Failed to register: ${response.error?.message || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      alert(`Error: ${error.message || 'Failed to register'}`);
+    }
+  };
+
+  const handleLogin = async (email: string) => {
+    try {
+      const { apiClient } = await import('@/lib/api/client');
+      const response = await apiClient.login(email);
+      if (response.success && response.data?.token) {
+        apiClient.setToken(response.data.token);
+        alert('✅ Login successful! You can now manage your API keys.');
+        // Refresh the page to update auth state
+        window.location.reload();
+      } else {
+        alert(`Failed to login: ${response.error?.message || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      alert(`Error: ${error.message || 'Failed to login'}`);
+    }
+  };
+
+  const handleSetKey = async (provider: 'openai' | 'gemini' | 'claude', apiKey: string) => {
+    try {
+      const { apiClient } = await import('@/lib/api/client');
+      const response = await apiClient.setApiKey(provider, apiKey);
+      if (response.success) {
+        alert(`${provider} API key saved successfully!`);
+      } else {
+        if (response.error?.message?.includes('UNAUTHORIZED') || response.error?.message?.includes('Authentication required')) {
+          alert(`❌ You need to register/login first!\n\nUse:\n/register your@email.com\nor\n/login your@email.com\n\nThen you can set your API keys.`);
+        } else {
+          alert(`Failed to save API key: ${response.error?.message || 'Unknown error'}`);
+        }
+      }
+    } catch (error: any) {
+      alert(`Error: ${error.message || 'Failed to save API key'}`);
+    }
+  };
+
+  const handleListKeys = async () => {
+    try {
+      const { apiClient } = await import('@/lib/api/client');
+      const response = await apiClient.getApiKeys();
+      if (response.success && response.data) {
+        const keysList = response.data.map(k => 
+          `${k.provider}${k.isDefault ? ' (default)' : ''}: ${k.maskedKey || '***'}`
+        ).join('\n');
+        alert(keysList || 'No API keys set. Use /setkey <provider> <key> to set one.');
+      }
+    } catch (error: any) {
+      alert(`Error: ${error.message || 'Failed to load API keys'}`);
+    }
+  };
+
+  const handleSetDefault = async (provider: 'openai' | 'gemini' | 'claude') => {
+    try {
+      const { apiClient } = await import('@/lib/api/client');
+      const response = await apiClient.setDefaultProvider(provider);
+      if (response.success) {
+        alert(`${provider} set as default provider!`);
+      } else {
+        alert(`Failed to set default: ${response.error?.message || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      alert(`Error: ${error.message || 'Failed to set default provider'}`);
     }
   };
 
@@ -90,8 +240,15 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled }: ChatInputProp
       } else if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         if (filteredCommands[selectedCommand]) {
-          setInput(`/${filteredCommands[selectedCommand].name} `);
-          setShowCommands(false);
+          const cmd = filteredCommands[selectedCommand].name;
+          if (cmd === 'settings' && onOpenSettings) {
+            onOpenSettings();
+            setInput('');
+            setShowCommands(false);
+          } else {
+            setInput(`/${cmd} `);
+            setShowCommands(false);
+          }
         }
       } else if (e.key === "Escape") {
         setShowCommands(false);
@@ -163,9 +320,15 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled }: ChatInputProp
                   <button
                     key={cmd.name}
                     onClick={() => {
-                      setInput(`/${cmd.name} `);
-                      setShowCommands(false);
-                      textareaRef.current?.focus();
+                      if (cmd.name === 'settings' && onOpenSettings) {
+                        onOpenSettings();
+                        setInput('');
+                        setShowCommands(false);
+                      } else {
+                        setInput(`/${cmd.name} `);
+                        setShowCommands(false);
+                        textareaRef.current?.focus();
+                      }
                     }}
                     className={cn(
                       "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors",

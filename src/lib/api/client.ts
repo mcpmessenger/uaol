@@ -137,12 +137,39 @@ class ApiClient {
     return this.request(`/tools/${toolId}`);
   }
 
-  // Chat/Workflow endpoints (to be implemented in backend)
-  async sendChatMessage(message: string): Promise<ApiResponse<any>> {
-    // This will connect to a chat service endpoint when implemented
+  // Chat/Workflow endpoints
+  async sendChatMessage(message: string, fileId?: string, provider?: 'openai' | 'gemini' | 'claude'): Promise<ApiResponse<any>> {
     return this.request('/chat', {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, fileId, provider }),
+    });
+  }
+
+  // API Key management endpoints
+  async setApiKey(provider: 'openai' | 'gemini' | 'claude', apiKey: string, isDefault: boolean = false): Promise<ApiResponse<any>> {
+    return this.request('/api-keys', {
+      method: 'POST',
+      body: JSON.stringify({ provider, apiKey, isDefault }),
+    });
+  }
+
+  async getApiKeys(): Promise<ApiResponse<Array<{ provider: string; isDefault: boolean; maskedKey: string; createdAt: string; updatedAt: string }>>> {
+    return this.request('/api-keys');
+  }
+
+  async getApiKey(provider: 'openai' | 'gemini' | 'claude'): Promise<ApiResponse<{ provider: string; isDefault: boolean; maskedKey: string } | null>> {
+    return this.request(`/api-keys/${provider}`);
+  }
+
+  async setDefaultProvider(provider: 'openai' | 'gemini' | 'claude'): Promise<ApiResponse<any>> {
+    return this.request(`/api-keys/${provider}/default`, {
+      method: 'PUT',
+    });
+  }
+
+  async deleteApiKey(provider: 'openai' | 'gemini' | 'claude'): Promise<ApiResponse<any>> {
+    return this.request(`/api-keys/${provider}`, {
+      method: 'DELETE',
     });
   }
 

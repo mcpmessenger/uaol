@@ -2,9 +2,12 @@ import { motion } from "framer-motion";
 import { Workflow, Moon, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useNavigate } from "react-router-dom";
 import logo from "@/assets/logo.png";
 
 export function Header() {
+  const navigate = useNavigate();
+
   return (
     <header className="flex-shrink-0 h-16 border-b border-border/30 bg-background/50 backdrop-blur-lg">
       <div className="flex items-center justify-between h-full px-6">
@@ -50,9 +53,15 @@ export function Header() {
           className="flex items-center gap-2"
         >
           <ThemeToggle />
-          <div className="ml-2 w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-2 w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 hover:bg-primary/20 hover:border-primary/30 transition-colors"
+            onClick={() => navigate("/login")}
+            aria-label="Login"
+          >
             <User className="w-5 h-5 text-primary" />
-          </div>
+          </Button>
         </motion.div>
       </div>
     </header>

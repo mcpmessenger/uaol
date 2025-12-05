@@ -16,12 +16,17 @@ export function errorHandler(err: Error, req: Request, res: Response, next: Next
     });
   }
 
-  logger.error('Unhandled error', err);
+  logger.error('Unhandled error', {
+    message: err.message,
+    stack: err.stack,
+    name: err.name,
+  });
   res.status(500).json({
     success: false,
     error: {
       code: 'INTERNAL_ERROR',
-      message: 'An internal error occurred',
+      message: process.env.NODE_ENV === 'development' ? err.message : 'An internal error occurred',
+      ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
     },
   });
 }

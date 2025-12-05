@@ -3,8 +3,14 @@ import { motion } from "framer-motion";
 import { ChatMessage, Message } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { WorkflowResultCard, WorkflowResult } from "./WorkflowResultCard";
+import { ApiKeySettings } from "./ApiKeySettings";
 import { Volume2, VolumeX } from "lucide-react";
 import logo from "@/assets/logo.png";
+
+// Fallback if logo fails to load
+const handleLogoError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+  e.currentTarget.style.display = 'none';
+};
 import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api/client";
 import { useTextToSpeech } from "@/hooks/use-text-to-speech";
@@ -41,6 +47,8 @@ export function ChatContainer() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showWorkflow, setShowWorkflow] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<'openai' | 'gemini' | 'claude' | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { isSpeaking, speak, stop: stopTTS } = useTextToSpeech();
 
@@ -57,7 +65,7 @@ export function ChatContainer() {
     scrollToBottom();
   }, [messages]);
 
-  const handleSend = async (content: string, files?: File[]) => {
+  const handleSend = async (content: string, files?: File[], provider?: 'openai' | 'gemini' | 'claude') => {
     const userMessage: Message = {
       id: `msg-${Date.now()}`,
       role: "user",
@@ -157,7 +165,7 @@ export function ChatContainer() {
         setMessages((prev) => [...prev, assistantMessage]);
       } else {
         // Connect to backend chat API
-        const response = await apiClient.sendChatMessage(content);
+        const response = await apiClient.sendChatMessage(content, undefined, provider || selectedProvider);
         
         if (response.success && response.data) {
           // Check if it's a placeholder response
@@ -225,7 +233,12 @@ export function ChatContainer() {
               className="flex gap-4"
             >
               <div className="flex-shrink-0 flex items-center justify-center">
-                <img src={logo} alt="UAOL Logo" className="w-10 h-10 object-contain" />
+                <img 
+                  src={logo} 
+                  alt="UAOL Logo" 
+                  className="w-10 h-10 object-contain"
+                  onError={handleLogoError}
+                />
               </div>
               <div className="flex-1 max-w-[75%]">
                 <WorkflowResultCard
@@ -243,7 +256,12 @@ export function ChatContainer() {
               className="flex gap-4"
             >
               <div className="flex-shrink-0 flex items-center justify-center">
-                <img src={logo} alt="UAOL Logo" className="w-10 h-10 object-contain animate-pulse" />
+                <img 
+                  src={logo} 
+                  alt="UAOL Logo" 
+                  className="w-10 h-10 object-contain animate-pulse"
+                  onError={handleLogoError}
+                />
               </div>
               <div className="glass-panel px-5 py-4">
                 <div className="flex gap-1.5">
@@ -257,6 +275,37 @@ export function ChatContainer() {
         </div>
       </div>
 
+      {/* Provider Selector */}
+      <div className="flex-shrink-0 px-4 pt-4 pb-2 border-t border-border/30 bg-background/50 backdrop-blur-lg">
+        <div className="max-w-4xl mx-auto flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Provider:</span>
+          <div className="flex gap-1">
+            {(['openai', 'gemini', 'claude'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setSelectedProvider(selectedProvider === p ? undefined : p)}
+                className={cn(
+                  "px-3 py-1 text-xs rounded-md transition-colors",
+                  selectedProvider === p
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                )}
+              >
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </button>
+            ))}
+            {selectedProvider && (
+              <button
+                onClick={() => setSelectedProvider(undefined)}
+                className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Input Area */}
       <div className="flex-shrink-0 p-4 pb-6 border-t border-border/30 bg-background/50 backdrop-blur-lg">
         <div className="relative">
@@ -266,7 +315,8 @@ export function ChatContainer() {
               // Auto-send transcribed text
               handleSend(text);
             }}
-            disabled={isProcessing} 
+            disabled={isProcessing}
+            onOpenSettings={() => setShowSettings(true)}
           />
           
           {/* TTS Toggle Button */}
@@ -297,6 +347,9 @@ export function ChatContainer() {
           </motion.button>
         </div>
       </div>
+
+      {/* API Key Settings Modal */}
+      <ApiKeySettings open={showSettings} onOpenChange={setShowSettings} />
     </div>
   );
 }

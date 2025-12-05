@@ -19,7 +19,11 @@ CREATE INDEX IF NOT EXISTS idx_user_oauth_tokens_user_id ON user_oauth_tokens(us
 CREATE INDEX IF NOT EXISTS idx_user_oauth_tokens_provider ON user_oauth_tokens(provider);
 
 -- Trigger to update updated_at
-CREATE OR REPLACE FUNCTION update_user_oauth_tokens_updated_at()
+-- CockroachDB requires dropping trigger before replacing function
+DROP TRIGGER IF EXISTS update_user_oauth_tokens_updated_at ON user_oauth_tokens;
+DROP FUNCTION IF EXISTS update_user_oauth_tokens_updated_at();
+
+CREATE FUNCTION update_user_oauth_tokens_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.updated_at = NOW();

@@ -47,6 +47,42 @@ async function runMigrations() {
       }
     }
 
+    // Migration: Add user API keys
+    const apiKeysMigrationPath = join(__dirname, 'migrations', 'add-user-api-keys.sql');
+    try {
+      const apiKeysMigration = readFileSync(apiKeysMigrationPath, 'utf-8');
+      await client.query(apiKeysMigration);
+      logger.info('User API keys migration completed');
+    } catch (error: any) {
+      // Migration might already be applied - check error code
+      if (error.code === 'ENOENT') {
+        logger.warn('User API keys migration file not found, skipping...');
+      } else if (error.code === '42710' || error.message?.includes('already exists') || error.message?.includes('duplicate key')) {
+        // Object already exists - this is OK, migration already applied
+        logger.info('User API keys migration already applied, skipping...');
+      } else {
+        logger.warn('User API keys migration error (may already be applied):', error.message);
+      }
+    }
+
+    // Migration: Add OAuth tokens table
+    const oauthTokensMigrationPath = join(__dirname, 'migrations', 'add-oauth-tokens.sql');
+    try {
+      const oauthTokensMigration = readFileSync(oauthTokensMigrationPath, 'utf-8');
+      await client.query(oauthTokensMigration);
+      logger.info('OAuth tokens migration completed');
+    } catch (error: any) {
+      // Migration might already be applied - check error code
+      if (error.code === 'ENOENT') {
+        logger.warn('OAuth tokens migration file not found, skipping...');
+      } else if (error.code === '42710' || error.message?.includes('already exists') || error.message?.includes('duplicate key')) {
+        // Object already exists - this is OK, migration already applied
+        logger.info('OAuth tokens migration already applied, skipping...');
+      } else {
+        logger.warn('OAuth tokens migration error (may already be applied):', error.message);
+      }
+    }
+
     logger.info('Database migrations completed successfully');
   } catch (error) {
     logger.error('Migration failed', error);

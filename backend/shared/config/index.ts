@@ -51,12 +51,63 @@ export const config = {
     secretKey: process.env.STRIPE_SECRET_KEY || '',
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
   },
-  oauth: {
-    google: {
+  get oauth() {
+    // Return values directly from process.env - read fresh each time oauth getter is called
+    const googleObj = {
       clientId: process.env.GOOGLE_CLIENT_ID || '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
       redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback',
-    },
+      scopes: [
+        'openid',
+        'email',
+        'profile',
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/calendar.readonly',
+        'https://www.googleapis.com/auth/calendar.events',
+        'https://www.googleapis.com/auth/drive.readonly',
+      ],
+    };
+
+    const outlookObj = {
+      clientId: process.env.OUTLOOK_CLIENT_ID || '',
+      clientSecret: process.env.OUTLOOK_CLIENT_SECRET || '',
+      redirectUri: process.env.OUTLOOK_REDIRECT_URI || 'http://localhost:3000/auth/outlook/callback',
+      tenant: process.env.OUTLOOK_TENANT || 'common',
+      scopes: [
+        'openid',
+        'email',
+        'profile',
+        'offline_access',
+        'https://graph.microsoft.com/Mail.Read',
+        'https://graph.microsoft.com/Mail.Send',
+        'https://graph.microsoft.com/Calendars.Read',
+        'https://graph.microsoft.com/Calendars.ReadWrite',
+        'https://graph.microsoft.com/Files.Read',
+      ],
+    };
+
+    const icloudObj = {
+      clientId: process.env.ICLOUD_CLIENT_ID || '',
+      clientSecret: process.env.ICLOUD_CLIENT_SECRET || '',
+      redirectUri: process.env.ICLOUD_REDIRECT_URI || 'http://localhost:3000/auth/icloud/callback',
+      teamId: process.env.ICLOUD_TEAM_ID || '',
+      keyId: process.env.ICLOUD_KEY_ID || '',
+      scopes: [
+        'openid',
+        'email',
+        'profile',
+        'https://www.icloud.com/mail',
+        'https://www.icloud.com/calendar',
+        'https://www.icloud.com/drive',
+      ],
+    };
+
+    return {
+      google: googleObj,
+      outlook: outlookObj,
+      icloud: icloudObj,
+    };
   },
   jwt: {
     secret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',

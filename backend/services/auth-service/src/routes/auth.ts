@@ -7,6 +7,11 @@ export const authRoutes = Router();
 // OAuth routes
 authRoutes.get('/google', authController.initiateGoogleOAuth);
 authRoutes.get('/google/callback', authController.handleGoogleCallback);
+authRoutes.get('/outlook', authController.initiateOutlookOAuth);
+authRoutes.get('/outlook/callback', authController.handleOutlookCallback);
+authRoutes.get('/icloud', authController.initiateIcloudOAuth);
+authRoutes.post('/icloud/callback', authController.handleIcloudCallback); // Apple uses POST
+authRoutes.get('/icloud/callback', authController.handleIcloudCallback); // Fallback for GET
 
 // API Key routes
 authRoutes.post('/api-key/regenerate', authenticate, authController.regenerateApiKey);

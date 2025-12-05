@@ -170,15 +170,27 @@ See `backend/env.example` for all available options. Key variables:
 - `OPENAI_API_KEY`: OpenAI API key for chat functionality
 - `JWT_SECRET`: Secret for JWT token signing
 - `API_GATEWAY_PORT`: Port for API Gateway (default: 3000)
+- `GOOGLE_CLIENT_ID`: Google OAuth client ID (optional, for OAuth login)
+- `GOOGLE_CLIENT_SECRET`: Google OAuth client secret (optional, for OAuth login)
 
 ### Frontend Environment Variables
 
 - `VITE_API_BASE_URL`: Backend API Gateway URL (default: http://localhost:3000)
 
+## 🔐 Authentication
+
+UAOL supports multiple authentication methods:
+
+- **Email/API Key**: Simple email-based login with auto-generated API keys
+- **OAuth Login**: Sign in with Google (Outlook and iCloud coming soon)
+  - See [OAUTH_SETUP_GUIDE.md](OAUTH_SETUP_GUIDE.md) for setup instructions
+  - Requires OAuth credentials in `backend/.env`
+
 ## 📚 Documentation
 
 - [Backend Quick Start](backend/QUICKSTART.md) - Detailed backend setup guide
 - [Database Setup](backend/DATABASE_SETUP.md) - Database configuration guide
+- [OAuth Setup Guide](OAUTH_SETUP_GUIDE.md) - Complete OAuth authentication setup (Google, Outlook, iCloud)
 - [Frontend Setup](FRONTEND_SETUP.md) - Frontend configuration
 - [Troubleshooting](backend/TROUBLESHOOTING.md) - Common issues and solutions
 
@@ -203,8 +215,11 @@ docker-compose up -d
 ## 📝 API Endpoints
 
 ### Authentication
-- `POST /auth/login` - User login
+- `POST /auth/login` - User login (email or API key)
+- `POST /auth/register` - User registration
 - `GET /auth/me` - Get current user
+- `GET /auth/google` - Initiate Google OAuth login
+- `GET /auth/google/callback` - Google OAuth callback
 
 ### Tools
 - `GET /tools` - List registered tools

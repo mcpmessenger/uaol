@@ -21,6 +21,7 @@ import path from 'path';
 import { config } from '@uaol/shared/config';
 import { createLogger } from '@uaol/shared/logger';
 import { rateLimiter } from './middleware/rate-limiter';
+import { getDatabasePool } from '@uaol/shared/database/connection';
 // CRITICAL: optionalAuthenticate imports database connection, so it must be imported dynamically
 // This will be imported in the async setup function below
 
@@ -116,7 +117,7 @@ app.use((req, res, next) => {
   // Uses optional auth: works for both authenticated users and guests
   app.post('/chat', optionalAuthenticate, async (req, res) => {
   try {
-    const { message, fileId } = req.body;
+    const { message, fileId, provider } = req.body;
     
     if (!message) {
       return res.status(400).json({
@@ -128,47 +129,104 @@ app.use((req, res, next) => {
       });
     }
 
+    const user = (req as any).user;
+    const isGuest = (req as any).isGuest;
+    
     logger.info('Chat message received', { 
       message: message.substring(0, 100),
-      fileId: fileId || 'none'
+      fileId: fileId || 'none',
+      provider: provider || 'default',
+      userId: user?.user_id,
+      isGuest
     });
     
-    // Get OpenAI API key - check process.env directly (most reliable)
+    // Determine which provider to use and get API key
+    let selectedProvider: 'openai' | 'gemini' | 'claude' = 'openai';
+    let apiKey: string | null = null;
+    
+    // If user is authenticated (not guest), try to get their API key
+    if (!isGuest && user) {
+      const { UserApiKeyModel } = await import('@uaol/shared/database/models/user-api-key');
+      const { decryptApiKey } = await import('@uaol/shared/auth/encryption');
+      const apiKeyModel = new UserApiKeyModel(getDatabasePool());
+      
+      // Determine provider: use requested provider, or default, or first available
+      if (provider && ['openai', 'gemini', 'claude'].includes(provider)) {
+        selectedProvider = provider as 'openai' | 'gemini' | 'claude';
+      } else {
+        // Get default provider
+        const defaultKey = await apiKeyModel.findDefaultByUser(user.user_id);
+        if (defaultKey) {
+          selectedProvider = defaultKey.provider;
+        } else {
+          // Get first available key
+          const allKeys = await apiKeyModel.listByUser(user.user_id);
+          if (allKeys.length > 0) {
+            selectedProvider = allKeys[0].provider;
+          }
+        }
+      }
+      
+      // Get the API key for selected provider
+      const userApiKey = await apiKeyModel.findByUserAndProvider(user.user_id, selectedProvider);
+      if (userApiKey) {
+        try {
+          apiKey = decryptApiKey(userApiKey.encrypted_key);
+          logger.info('Using user API key', { provider: selectedProvider, userId: user.user_id });
+        } catch (decryptError: any) {
+          logger.error('Failed to decrypt user API key', { error: decryptError.message });
+        }
+      }
+    }
+    
+    // Fallback to global API key if no user key found
     const rawKey = process.env.OPENAI_API_KEY || '';
-    const openaiApiKey = rawKey.trim(); // Remove whitespace
-    const openaiModel = process.env.OPENAI_MODEL || 'gpt-4';
+    if (!apiKey) {
+      apiKey = rawKey.trim();
+      selectedProvider = 'openai'; // Global key is always OpenAI
+      logger.info('Using global API key fallback');
+    }
     
-    // Log for debugging (but don't log the full key)
-    logger.info('OpenAI config check', { 
-      hasEnvKey: !!process.env.OPENAI_API_KEY,
-      rawKeyLength: rawKey.length,
-      trimmedKeyLength: openaiApiKey.length,
-      keyStarts: openaiApiKey ? openaiApiKey.substring(0, 12) + '...' : 'empty',
-      keyEnds: openaiApiKey && openaiApiKey.length > 12 ? '...' + openaiApiKey.substring(openaiApiKey.length - 8) : 'empty',
-      keyFormatValid: openaiApiKey.startsWith('sk-'),
-      hasWhitespace: rawKey !== rawKey.trim()
-    });
-    
-    if (!openaiApiKey) {
-      // Fallback response if OpenAI not configured
+    if (!apiKey) {
       return res.json({
         success: true,
         data: {
-          message: `I received your message: "${message}". To enable AI responses, please set OPENAI_API_KEY in your backend .env file.`,
+          message: `I received your message: "${message}". To enable AI responses, please set an API key. You can set your own API keys via /setkey command or use the settings.`,
           timestamp: new Date().toISOString(),
         },
       });
     }
     
-    // Validate key format
-    if (!openaiApiKey.startsWith('sk-')) {
-      logger.error('Invalid OpenAI API key format', { 
-        keyStarts: openaiApiKey.substring(0, 10) 
+    // Log for debugging (but don't log the full key)
+    logger.info('API key config check', { 
+      hasEnvKey: !!process.env.OPENAI_API_KEY,
+      hasApiKey: !!apiKey,
+      provider: selectedProvider,
+      rawKeyLength: rawKey.length,
+      trimmedKeyLength: apiKey ? apiKey.length : 0,
+      keyStarts: apiKey ? apiKey.substring(0, 12) + '...' : 'empty',
+      keyEnds: apiKey && apiKey.length > 12 ? '...' + apiKey.substring(apiKey.length - 8) : 'empty',
+      keyFormatValid: apiKey ? (selectedProvider === 'openai' ? apiKey.startsWith('sk-') : true) : false,
+      hasWhitespace: rawKey !== rawKey.trim()
+    });
+    
+    // Validate key format based on provider
+    const { createProvider } = await import('@uaol/shared/ai/provider-factory');
+    let aiProvider;
+    try {
+      aiProvider = createProvider(selectedProvider, apiKey);
+      if (!aiProvider.validateApiKey(apiKey)) {
+        throw new Error(`Invalid ${selectedProvider} API key format`);
+      }
+    } catch (validationError: any) {
+      logger.error('Invalid API key format', { 
+        provider: selectedProvider,
+        error: validationError.message
       });
       return res.json({
         success: true,
         data: {
-          message: `I received your message: "${message}". However, the OpenAI API key format is invalid. It should start with "sk-". Please check your OPENAI_API_KEY in backend/.env.`,
+          message: `I received your message: "${message}". However, the ${selectedProvider} API key format is invalid. Please check your API key.`,
           timestamp: new Date().toISOString(),
         },
       });
@@ -252,108 +310,54 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
 
     const finalUserMessage = context ? `${context}User Question: ${message}` : message;
 
-    // Call OpenAI API
+    // Call AI provider
     try {
-      // Some newer models (o1, o3, gpt-5.x, etc.) require max_completion_tokens instead of max_tokens
-      // Check if model name suggests it needs max_completion_tokens
-      const modelLower = openaiModel.toLowerCase().replace(/\s+/g, ''); // Remove spaces
-      const modelsRequiringMaxCompletionTokens = ['o1', 'o1-preview', 'o1-mini', 'o3', 'o3-mini', 'gpt-5'];
-      const useMaxCompletionTokens = modelsRequiringMaxCompletionTokens.some(m => modelLower.includes(m)) || 
-                                      modelLower.startsWith('o1') || 
-                                      modelLower.startsWith('o3') ||
-                                      modelLower.startsWith('gpt-5') ||
-                                      modelLower.startsWith('gpt5') ||
-                                      /^gpt-?5\./.test(modelLower);
-      
-      logger.info('OpenAI API request', {
-        model: openaiModel,
-        useMaxCompletionTokens,
-        parameter: useMaxCompletionTokens ? 'max_completion_tokens' : 'max_tokens'
+      logger.info('AI provider request', {
+        provider: selectedProvider,
+        messageLength: finalUserMessage.length
       });
       
-      // Build request body with appropriate token limit parameter
-      const requestBody: any = {
-        model: openaiModel,
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt,
-          },
-          {
-            role: 'user',
-            content: finalUserMessage,
-          },
-        ],
-        temperature: 0.7,
-      };
-      
-      // Use the correct parameter based on model
-      if (useMaxCompletionTokens) {
-        requestBody.max_completion_tokens = 2000;
-      } else {
-        requestBody.max_tokens = 2000; // Increased for document analysis
-      }
-      
-      const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiApiKey}`,
+      const messages = [
+        {
+          role: 'system' as const,
+          content: systemPrompt,
         },
-        body: JSON.stringify(requestBody),
+        {
+          role: 'user' as const,
+          content: finalUserMessage,
+        },
+      ];
+      
+      const aiMessage = await aiProvider.chatCompletion(messages, {
+        temperature: 0.7,
+        maxTokens: 2000,
       });
-
-      if (!openaiResponse.ok) {
-        const errorData = await openaiResponse.json();
-        const errorMessage = errorData.error?.message || `OpenAI API error: ${openaiResponse.statusText}`;
-        
-        logger.error('OpenAI API error response', {
-          status: openaiResponse.status,
-          statusText: openaiResponse.statusText,
-          error: errorData.error,
-          model: openaiModel,
-          keyEnds: openaiApiKey.substring(openaiApiKey.length - 8)
-        });
-        
-        // Handle specific parameter errors
-        if (errorMessage.includes("max_tokens") && (errorMessage.includes("max_completion_tokens") || errorMessage.includes("not supported"))) {
-          logger.warn('Model requires max_completion_tokens but was not detected', { model: openaiModel });
-          throw new Error(`Model ${openaiModel} requires 'max_completion_tokens' instead of 'max_tokens'. Please check your OPENAI_MODEL setting in backend/.env. Supported models that need this: o1, o1-preview, o1-mini, o3, o3-mini, gpt-5.x.`);
-        }
-        
-        throw new Error(errorMessage);
-      }
-
-      const data = await openaiResponse.json();
-      const aiMessage = data.choices[0]?.message?.content || 'I apologize, but I could not generate a response.';
 
       res.json({
         success: true,
         data: {
           message: aiMessage,
+          provider: selectedProvider,
           timestamp: new Date().toISOString(),
         },
       });
-    } catch (openaiError: any) {
-      logger.error('OpenAI API error', {
-        error: openaiError.message,
-        stack: openaiError.stack,
-        keyLength: openaiApiKey.length,
-        keyEnds: openaiApiKey.substring(openaiApiKey.length - 8)
+    } catch (aiError: any) {
+      logger.error('AI provider error', {
+        provider: selectedProvider,
+        error: aiError.message,
+        stack: aiError.stack,
       });
       
       // Provide more helpful error messages
-      let errorMessage = openaiError.message;
-      if (errorMessage.includes('Incorrect API key')) {
-        errorMessage = 'Incorrect API key provided. Please verify your OPENAI_API_KEY in backend/.env is correct and active. You can check your keys at https://platform.openai.com/api-keys';
-      } else if (errorMessage.includes('Invalid API key')) {
-        errorMessage = 'Invalid API key format. Please check your OPENAI_API_KEY in backend/.env starts with "sk-" and has no quotes or extra spaces.';
+      let errorMessage = aiError.message;
+      if (errorMessage.includes('Incorrect API key') || errorMessage.includes('Invalid API key')) {
+        errorMessage = `Incorrect or invalid ${selectedProvider} API key. Please verify your API key is correct and active.`;
       }
       
       res.json({
         success: true,
         data: {
-          message: `I received your message: "${message}". However, there was an error calling the AI service: ${errorMessage}`,
+          message: `I received your message: "${message}". However, there was an error calling the ${selectedProvider} AI service: ${errorMessage}`,
           timestamp: new Date().toISOString(),
         },
       });
@@ -517,52 +521,55 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
     });
   }
   });
-})(); // End async IIFE for routes with optionalAuthenticate
+  // API Key management routes (requires authentication, not guest)
+  const apiKeysRouter = await import('./routes/api-keys.js');
+  app.use('/api-keys', apiKeysRouter.default);
+  
+  // Proxy routes to services
+  app.use('/auth', createProxyMiddleware({
+    target: `http://localhost:${config.services.auth.port}`,
+    changeOrigin: true,
+    pathRewrite: { '^/auth': '' }, // Strip /auth prefix before forwarding
+  }));
 
-// Proxy routes to services
-app.use('/auth', createProxyMiddleware({
-  target: `http://localhost:${config.services.auth.port}`,
-  changeOrigin: true,
-  pathRewrite: { '^/auth': '' },
-}));
+  app.use('/tools', createProxyMiddleware({
+    target: `http://localhost:${config.services.toolRegistry.port}`,
+    changeOrigin: true,
+    pathRewrite: { '^/tools': '/tools' },
+  }));
 
-app.use('/tools', createProxyMiddleware({
-  target: `http://localhost:${config.services.toolRegistry.port}`,
-  changeOrigin: true,
-  pathRewrite: { '^/tools': '/tools' },
-}));
+  app.use('/jobs', createProxyMiddleware({
+    target: `http://localhost:${config.services.jobOrchestration.port}`,
+    changeOrigin: true,
+    pathRewrite: { '^/jobs': '/jobs' },
+  }));
 
-app.use('/jobs', createProxyMiddleware({
-  target: `http://localhost:${config.services.jobOrchestration.port}`,
-  changeOrigin: true,
-  pathRewrite: { '^/jobs': '/jobs' },
-}));
+  app.use('/proxy', createProxyMiddleware({
+    target: `http://localhost:${config.services.toolProxy.port}`,
+    changeOrigin: true,
+    pathRewrite: { '^/proxy': '/proxy' },
+  }));
 
-app.use('/proxy', createProxyMiddleware({
-  target: `http://localhost:${config.services.toolProxy.port}`,
-  changeOrigin: true,
-  pathRewrite: { '^/proxy': '/proxy' },
-}));
+  app.use('/billing', createProxyMiddleware({
+    target: `http://localhost:${config.services.billing.port}`,
+    changeOrigin: true,
+    pathRewrite: { '^/billing': '/billing' },
+  }));
 
-app.use('/billing', createProxyMiddleware({
-  target: `http://localhost:${config.services.billing.port}`,
-  changeOrigin: true,
-  pathRewrite: { '^/billing': '/billing' },
-}));
+  app.use('/storage', createProxyMiddleware({
+    target: `http://localhost:${config.services.storage.port}`,
+    changeOrigin: true,
+    pathRewrite: { '^/storage': '/storage' },
+  }));
 
-app.use('/storage', createProxyMiddleware({
-  target: `http://localhost:${config.services.storage.port}`,
-  changeOrigin: true,
-  pathRewrite: { '^/storage': '/storage' },
-}));
+  // Serve uploaded files statically
+  const uploadsDir = path.join(__dirname, '../../uploads');
+  app.use('/uploads', express.static(uploadsDir));
 
-// Serve uploaded files statically
-const uploadsDir = path.join(__dirname, '../../uploads');
-app.use('/uploads', express.static(uploadsDir));
-
-const port = config.apiGateway.port;
-
-app.listen(port, () => {
-  logger.info(`API Gateway listening on port ${port}`);
-});
+  // Start server AFTER all routes are registered
+  const port = config.apiGateway.port;
+  app.listen(port, () => {
+    logger.info(`API Gateway listening on port ${port}`);
+  });
+})(); // End async IIFE - server starts after routes are registered
 
