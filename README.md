@@ -239,7 +239,11 @@ This project is licensed under the MIT License.
 
 ## 📞 Support
 
-For issues and questions, please open an issue on GitHub.
+**Need Help?**
+- 🆘 **General Help**: See [GET_HELP.md](GET_HELP.md) for support options
+- 🗄️ **CockroachDB Issues**: See [COCKROACHDB_HELP.md](COCKROACHDB_HELP.md) for quick fixes
+- 🐛 **Report Bugs**: Open an issue on [GitHub Issues](https://github.com/mcpmessenger/uaol/issues)
+- 📚 **Troubleshooting**: See [backend/TROUBLESHOOTING.md](backend/TROUBLESHOOTING.md) for common issues
 
 ---
 

@@ -9,6 +9,52 @@ import * as XLSX from 'xlsx';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { indexDocumentChunks, type DocumentChunk } from '@uaol/shared/vector-store/vector-store';
 
+// Polyfill loading function - ensures DOM APIs are available for pdf-parse
+let polyfillsLoaded = false;
+async function ensurePolyfillsLoaded() {
+  if (polyfillsLoaded) return;
+  
+  try {
+    // Load DOMMatrix polyfill
+    if (typeof globalThis.DOMMatrix === 'undefined') {
+      const { DOMMatrix, DOMPoint } = await import('dommatrix');
+      globalThis.DOMMatrix = DOMMatrix;
+      globalThis.DOMPoint = DOMPoint;
+    }
+    
+    // Polyfill ImageData
+    if (typeof globalThis.ImageData === 'undefined') {
+      globalThis.ImageData = class ImageData {
+        constructor(data: Uint8ClampedArray | number, width: number, height?: number) {
+          if (typeof data === 'number') {
+            this.data = new Uint8ClampedArray(data * (height || width));
+            this.width = data;
+            this.height = height || width;
+          } else {
+            this.data = data;
+            this.width = width;
+            this.height = height || (data.length / (width * 4));
+          }
+        }
+        data: Uint8ClampedArray;
+        width: number;
+        height: number;
+      } as any;
+    }
+    
+    // Polyfill Path2D
+    if (typeof globalThis.Path2D === 'undefined') {
+      globalThis.Path2D = class Path2D {} as any;
+    }
+    
+    polyfillsLoaded = true;
+    logger.info('DOM polyfills loaded for PDF parsing');
+  } catch (error: any) {
+    logger.warn('Could not load DOM polyfills for PDF parsing', { error: error.message });
+    // Continue anyway - might still work
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -186,6 +232,9 @@ async function extractTextAndMetadata(
   // 2. PDF files
   if (file.mimetype === 'application/pdf') {
     try {
+      // Ensure polyfills are loaded before importing pdf-parse
+      await ensurePolyfillsLoaded();
+      
       // Dynamic import for CommonJS module (pdf-parse doesn't have default export)
       const pdfParseModule = await import('pdf-parse');
       const pdfParse = pdfParseModule.default || pdfParseModule;
@@ -196,7 +245,7 @@ async function extractTextAndMetadata(
         metadata,
       };
     } catch (error: any) {
-      logger.error('PDF parsing failed', { error: error.message, filePath });
+      logger.error('PDF parsing failed', { error: error.message, filePath, stack: error.stack });
       throw new Error(`Failed to parse PDF: ${error.message}`);
     }
   }

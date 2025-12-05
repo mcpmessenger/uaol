@@ -1,42 +1,24 @@
-import dotenv from 'dotenv';
-import { resolve } from 'path';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-
-// Get the directory of the current module
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Load .env from backend directory (2 levels up from shared/config)
-const envPath = resolve(__dirname, '../../.env');
-console.log('[Config] Loading .env from:', envPath);
-
-const envResult = dotenv.config({ path: envPath });
-
-if (envResult.error) {
-  console.error('[Config] ERROR loading .env:', envResult.error);
-} else {
-  console.log('[Config] .env file loaded successfully');
-}
-
-// Debug: Log if DATABASE_URL is loaded
-if (!process.env.DATABASE_URL) {
-  console.warn('[Config] ⚠️  WARNING: DATABASE_URL not found in environment variables');
-  console.warn('[Config] .env path:', envPath);
-  console.warn('[Config] Using default localhost connection (this will likely fail)');
-  console.warn('[Config] Available env vars:', Object.keys(process.env).filter(k => k.includes('DATABASE')).join(', '));
-} else {
-  const urlForLogging = process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@');
-  console.log('[Config] ✅ DATABASE_URL loaded:', urlForLogging.substring(0, 80) + '...');
-}
+// NOTE: dotenv.config() has been REMOVED from this file to prevent race conditions.
+// Each service's index.ts must call dotenv.config() BEFORE importing this config module.
+// This ensures process.env.DATABASE_URL is set before the database connection pool is created.
 
 // Use getters to read from process.env dynamically (not cached)
 export const config = {
   get database() {
+    // ALWAYS log when getter is accessed for debugging
+    process.stdout.write(`[Config] database.url getter accessed\n`);
+    process.stdout.write(`[Config] process.env.DATABASE_URL: ${process.env.DATABASE_URL ? 'SET' : 'NOT SET'}\n`);
+    if (process.env.DATABASE_URL) {
+      const urlForLogging = process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@');
+      process.stdout.write(`[Config] process.env.DATABASE_URL value: ${urlForLogging.substring(0, 60)}...\n`);
+    }
+    
     const url = process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/uaol';
+    process.stdout.write(`[Config] Returning URL: ${url.includes('localhost') ? 'LOCALHOST (FALLBACK)' : 'REMOTE'}\n`);
+    
     // Debug: Log when getter is accessed (only for localhost to avoid spam)
     if (url.includes('localhost') || url.includes('127.0.0.1')) {
-      console.log('[Config] database.url getter accessed - returning localhost');
+      console.log('[Config] ⚠️ WARNING: database.url getter returning localhost!');
       console.log('[Config] process.env.DATABASE_URL:', process.env.DATABASE_URL ? 'SET' : 'NOT SET');
     }
     return {

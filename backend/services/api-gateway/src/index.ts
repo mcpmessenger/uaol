@@ -21,7 +21,8 @@ import path from 'path';
 import { config } from '@uaol/shared/config';
 import { createLogger } from '@uaol/shared/logger';
 import { rateLimiter } from './middleware/rate-limiter';
-import { optionalAuthenticate } from '@uaol/shared/auth/optional-authenticate';
+// CRITICAL: optionalAuthenticate imports database connection, so it must be imported dynamically
+// This will be imported in the async setup function below
 
 // Configure multer for audio file uploads (Whisper)
 const audioUpload = multer({
@@ -107,9 +108,13 @@ app.use((req, res, next) => {
   express.json()(req, res, next);
 });
 
-// Chat endpoint - processes messages with AI
-// Uses optional auth: works for both authenticated users and guests
-app.post('/chat', optionalAuthenticate, async (req, res) => {
+// CRITICAL: Load routes that use optionalAuthenticate dynamically AFTER .env is loaded
+(async () => {
+  const { optionalAuthenticate } = await import('@uaol/shared/auth/optional-authenticate');
+  
+  // Chat endpoint - processes messages with AI
+  // Uses optional auth: works for both authenticated users and guests
+  app.post('/chat', optionalAuthenticate, async (req, res) => {
   try {
     const { message, fileId } = req.body;
     
@@ -129,14 +134,19 @@ app.post('/chat', optionalAuthenticate, async (req, res) => {
     });
     
     // Get OpenAI API key - check process.env directly (most reliable)
-    const openaiApiKey = process.env.OPENAI_API_KEY || '';
+    const rawKey = process.env.OPENAI_API_KEY || '';
+    const openaiApiKey = rawKey.trim(); // Remove whitespace
     const openaiModel = process.env.OPENAI_MODEL || 'gpt-4';
     
-    // Log for debugging
+    // Log for debugging (but don't log the full key)
     logger.info('OpenAI config check', { 
       hasEnvKey: !!process.env.OPENAI_API_KEY,
-      keyLength: openaiApiKey.length,
-      keyPreview: openaiApiKey ? openaiApiKey.substring(0, 20) + '...' : 'empty'
+      rawKeyLength: rawKey.length,
+      trimmedKeyLength: openaiApiKey.length,
+      keyStarts: openaiApiKey ? openaiApiKey.substring(0, 12) + '...' : 'empty',
+      keyEnds: openaiApiKey && openaiApiKey.length > 12 ? '...' + openaiApiKey.substring(openaiApiKey.length - 8) : 'empty',
+      keyFormatValid: openaiApiKey.startsWith('sk-'),
+      hasWhitespace: rawKey !== rawKey.trim()
     });
     
     if (!openaiApiKey) {
@@ -145,6 +155,20 @@ app.post('/chat', optionalAuthenticate, async (req, res) => {
         success: true,
         data: {
           message: `I received your message: "${message}". To enable AI responses, please set OPENAI_API_KEY in your backend .env file.`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+    
+    // Validate key format
+    if (!openaiApiKey.startsWith('sk-')) {
+      logger.error('Invalid OpenAI API key format', { 
+        keyStarts: openaiApiKey.substring(0, 10) 
+      });
+      return res.json({
+        success: true,
+        data: {
+          message: `I received your message: "${message}". However, the OpenAI API key format is invalid. It should start with "sk-". Please check your OPENAI_API_KEY in backend/.env.`,
           timestamp: new Date().toISOString(),
         },
       });
@@ -181,40 +205,123 @@ ${retrievedChunks.join('\n\n---\n\n')}
     }
 
     // Construct the final prompt for the LLM
-    const systemPrompt = `You are UAOL (Universal AI Orchestration Layer), an AI assistant that helps users execute complex workflows, analyze data, and orchestrate AI tools. When users upload documents, you have access to the extracted text content. Analyze documents thoroughly, summarize key points, answer questions about the content, and provide insights. Be helpful, concise, and professional.
+    const systemPrompt = `You are UAOL (Universal AI Orchestration Layer), an AI assistant that helps users execute complex workflows, analyze data, and orchestrate AI tools.
 
-${context ? 'Use the provided CONTEXT from the user\'s document to answer their question. If the context does not contain the answer, state that you cannot find the information in the provided document.' : ''}`;
+CRITICAL INSTRUCTION: When users upload files (PDFs, documents, etc.), the FULL EXTRACTED TEXT CONTENT from those files is included directly in their message. 
+
+Look for these markers in the user's message:
+- "[Document Content Extracted]" - indicates document text follows
+- "--- Document: [filename]" - marks the start of a document's extracted text
+- The actual text content appears AFTER these markers
+
+When you see document content in the user's message, you MUST:
+1. Read and analyze the FULL extracted text
+2. Use it to answer their questions about the document
+3. Summarize, explain, or provide insights based on that content
+4. Do NOT say you don't have access - the content IS in the message
+
+Your capabilities:
+- Analyze documents thoroughly using the extracted text provided
+- Summarize key points from document content
+- Answer questions about the document content
+- Provide insights based on the extracted text
+- Explain technical terms and concepts in simpler language
+
+Be helpful, concise, and professional. ALWAYS use the document content when it's provided in the message.
+
+${context ? 'Additionally, you have access to RAG-retrieved context from the user\'s document. Use this context along with any content directly in the message to provide comprehensive answers.' : ''}`;
+
+    // Log the message to help debug document content inclusion
+    const hasDocumentContent = message.includes('[Document Content Extracted]') || message.includes('--- Document:');
+    const documentContentLength = message.match(/\[Document Content Extracted\]([\s\S]*?)(?=\n\n|$)/)?.[1]?.length || 0;
+    
+    logger.info('Message analysis', {
+      messageLength: message.length,
+      hasDocumentContent,
+      documentContentLength,
+      messagePreview: message.substring(0, 300),
+      messageEnd: message.length > 300 ? message.substring(message.length - 200) : ''
+    });
+    
+    // If document content is detected but seems empty, log a warning
+    if (hasDocumentContent && documentContentLength < 50) {
+      logger.warn('Document content marker found but content appears empty or very short', {
+        documentContentLength
+      });
+    }
 
     const finalUserMessage = context ? `${context}User Question: ${message}` : message;
 
     // Call OpenAI API
     try {
+      // Some newer models (o1, o3, gpt-5.x, etc.) require max_completion_tokens instead of max_tokens
+      // Check if model name suggests it needs max_completion_tokens
+      const modelLower = openaiModel.toLowerCase().replace(/\s+/g, ''); // Remove spaces
+      const modelsRequiringMaxCompletionTokens = ['o1', 'o1-preview', 'o1-mini', 'o3', 'o3-mini', 'gpt-5'];
+      const useMaxCompletionTokens = modelsRequiringMaxCompletionTokens.some(m => modelLower.includes(m)) || 
+                                      modelLower.startsWith('o1') || 
+                                      modelLower.startsWith('o3') ||
+                                      modelLower.startsWith('gpt-5') ||
+                                      modelLower.startsWith('gpt5') ||
+                                      /^gpt-?5\./.test(modelLower);
+      
+      logger.info('OpenAI API request', {
+        model: openaiModel,
+        useMaxCompletionTokens,
+        parameter: useMaxCompletionTokens ? 'max_completion_tokens' : 'max_tokens'
+      });
+      
+      // Build request body with appropriate token limit parameter
+      const requestBody: any = {
+        model: openaiModel,
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt,
+          },
+          {
+            role: 'user',
+            content: finalUserMessage,
+          },
+        ],
+        temperature: 0.7,
+      };
+      
+      // Use the correct parameter based on model
+      if (useMaxCompletionTokens) {
+        requestBody.max_completion_tokens = 2000;
+      } else {
+        requestBody.max_tokens = 2000; // Increased for document analysis
+      }
+      
       const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${openaiApiKey}`,
         },
-        body: JSON.stringify({
-          model: openaiModel,
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt,
-            },
-            {
-              role: 'user',
-              content: finalUserMessage,
-            },
-          ],
-          temperature: 0.7,
-          max_tokens: 2000, // Increased for document analysis
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!openaiResponse.ok) {
         const errorData = await openaiResponse.json();
-        throw new Error(errorData.error?.message || 'OpenAI API error');
+        const errorMessage = errorData.error?.message || `OpenAI API error: ${openaiResponse.statusText}`;
+        
+        logger.error('OpenAI API error response', {
+          status: openaiResponse.status,
+          statusText: openaiResponse.statusText,
+          error: errorData.error,
+          model: openaiModel,
+          keyEnds: openaiApiKey.substring(openaiApiKey.length - 8)
+        });
+        
+        // Handle specific parameter errors
+        if (errorMessage.includes("max_tokens") && (errorMessage.includes("max_completion_tokens") || errorMessage.includes("not supported"))) {
+          logger.warn('Model requires max_completion_tokens but was not detected', { model: openaiModel });
+          throw new Error(`Model ${openaiModel} requires 'max_completion_tokens' instead of 'max_tokens'. Please check your OPENAI_MODEL setting in backend/.env. Supported models that need this: o1, o1-preview, o1-mini, o3, o3-mini, gpt-5.x.`);
+        }
+        
+        throw new Error(errorMessage);
       }
 
       const data = await openaiResponse.json();
@@ -228,11 +335,25 @@ ${context ? 'Use the provided CONTEXT from the user\'s document to answer their 
         },
       });
     } catch (openaiError: any) {
-      logger.error('OpenAI API error', openaiError);
+      logger.error('OpenAI API error', {
+        error: openaiError.message,
+        stack: openaiError.stack,
+        keyLength: openaiApiKey.length,
+        keyEnds: openaiApiKey.substring(openaiApiKey.length - 8)
+      });
+      
+      // Provide more helpful error messages
+      let errorMessage = openaiError.message;
+      if (errorMessage.includes('Incorrect API key')) {
+        errorMessage = 'Incorrect API key provided. Please verify your OPENAI_API_KEY in backend/.env is correct and active. You can check your keys at https://platform.openai.com/api-keys';
+      } else if (errorMessage.includes('Invalid API key')) {
+        errorMessage = 'Invalid API key format. Please check your OPENAI_API_KEY in backend/.env starts with "sk-" and has no quotes or extra spaces.';
+      }
+      
       res.json({
         success: true,
         data: {
-          message: `I received your message: "${message}". However, there was an error calling the AI service: ${openaiError.message}. Please check your OpenAI API key.`,
+          message: `I received your message: "${message}". However, there was an error calling the AI service: ${errorMessage}`,
           timestamp: new Date().toISOString(),
         },
       });
@@ -247,10 +368,10 @@ ${context ? 'Use the provided CONTEXT from the user\'s document to answer their 
       },
     });
   }
-});
+  });
 
-// File upload endpoint
-app.post('/chat/upload', optionalAuthenticate, fileUpload.array('files', 10), async (req, res) => {
+  // File upload endpoint
+  app.post('/chat/upload', optionalAuthenticate, fileUpload.array('files', 10), async (req, res) => {
   try {
     const user = (req as any).user;
     const files = (req.files as Express.Multer.File[]) || [];
@@ -310,10 +431,10 @@ app.post('/chat/upload', optionalAuthenticate, fileUpload.array('files', 10), as
       },
     });
   }
-});
+  });
 
-// Whisper transcription endpoint (STT)
-app.post('/chat/transcribe', optionalAuthenticate, audioUpload.single('audio'), async (req, res) => {
+  // Whisper transcription endpoint (STT)
+  app.post('/chat/transcribe', optionalAuthenticate, audioUpload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -395,7 +516,8 @@ app.post('/chat/transcribe', optionalAuthenticate, audioUpload.single('audio'), 
       },
     });
   }
-});
+  });
+})(); // End async IIFE for routes with optionalAuthenticate
 
 // Proxy routes to services
 app.use('/auth', createProxyMiddleware({

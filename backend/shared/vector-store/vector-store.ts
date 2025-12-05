@@ -6,10 +6,21 @@ import { OpenAI } from 'openai';
 
 const logger = createLogger('vector-store');
 
-// Initialize OpenAI client for embeddings
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy initialization of OpenAI client to ensure env vars are loaded
+let openaiClient: OpenAI | null = null;
+
+function getOpenAIClient(): OpenAI {
+  if (!openaiClient) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error('OPENAI_API_KEY is not set in environment variables');
+    }
+    openaiClient = new OpenAI({
+      apiKey: apiKey.trim(), // Remove any whitespace
+    });
+  }
+  return openaiClient;
+}
 
 /**
  * Document chunk structure for RAG
@@ -104,6 +115,7 @@ const vectorDb = new InMemoryVectorStore();
  */
 async function createEmbedding(text: string): Promise<number[]> {
   try {
+    const openai = getOpenAIClient();
     const response = await openai.embeddings.create({
       model: 'text-embedding-3-small',
       input: text,
@@ -196,4 +208,5 @@ export async function deleteFileVectors(fileId: string): Promise<void> {
     throw error;
   }
 }
+
 

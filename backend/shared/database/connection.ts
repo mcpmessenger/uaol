@@ -1,13 +1,33 @@
+// CRITICAL: Log at the VERY TOP before any imports to verify module is loading
+process.stdout.write(`[DB Connection] ⚡ MODULE STARTING - ${new Date().toISOString()}\n`);
+
 import { Pool, PoolConfig } from 'pg';
 import { config } from '../config/index.js';
 
 // Log when module loads to confirm it's being used
-console.log('[DB Connection] Module loaded at:', new Date().toISOString());
+process.stdout.write(`[DB Connection] ✅ Module loaded at: ${new Date().toISOString()}\n`);
+process.stdout.write(`[DB Connection] process.env.DATABASE_URL: ${process.env.DATABASE_URL ? 'SET' : 'NOT SET'}\n`);
+if (process.env.DATABASE_URL) {
+  const urlForLogging = process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@');
+  process.stdout.write(`[DB Connection] DATABASE_URL value: ${urlForLogging.substring(0, 80)}...\n`);
+}
 
 let pool: Pool | null = null;
 let poolConnectionString: string | null = null;
 
 export function getDatabasePool(): Pool {
+  // CRITICAL DEBUG: Log every time this function is called
+  process.stdout.write(`[DB Connection] getDatabasePool() CALLED at ${new Date().toISOString()}\n`);
+  process.stdout.write(`[DB Connection] process.env.DATABASE_URL in getDatabasePool: ${process.env.DATABASE_URL ? 'SET' : 'NOT SET'}\n`);
+  if (process.env.DATABASE_URL) {
+    const urlForLogging = process.env.DATABASE_URL.replace(/:[^:@]+@/, ':****@');
+    process.stdout.write(`[DB Connection] DATABASE_URL: ${urlForLogging.substring(0, 60)}...\n`);
+  }
+  process.stdout.write(`[DB Connection] Current pool: ${pool ? 'EXISTS' : 'NULL'}\n`);
+  if (poolConnectionString) {
+    process.stdout.write(`[DB Connection] Pool connection string: ${poolConnectionString.includes('localhost') ? 'LOCALHOST' : 'REMOTE'}\n`);
+  }
+  
   // NUCLEAR OPTION: If process.env.DATABASE_URL is set and NOT localhost, ALWAYS use it
   // Destroy any existing pool that uses localhost
   if (process.env.DATABASE_URL && 

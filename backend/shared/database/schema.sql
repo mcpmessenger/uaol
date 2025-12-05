@@ -1,17 +1,9 @@
 -- UAOL Database Schema
 -- Supports PostgreSQL, CockroachDB, and PlanetScale
 
--- Enable UUID extension (PostgreSQL only - CockroachDB has gen_random_uuid() built-in)
--- CockroachDB uses gen_random_uuid() which is also available in PostgreSQL 13+
-DO $$
-BEGIN
-    -- Try to create extension (will fail silently on CockroachDB, which is fine)
-    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-EXCEPTION
-    WHEN OTHERS THEN
-        -- Extension creation failed (likely CockroachDB) - this is OK
-        NULL;
-END $$;
+-- Note: UUID extension is not needed - we use gen_random_uuid() which is built-in
+-- in both PostgreSQL 13+ and CockroachDB. For older PostgreSQL versions, you may
+-- need to manually run: CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
