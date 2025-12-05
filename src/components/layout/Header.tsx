@@ -9,7 +9,7 @@ export function Header() {
   const navigate = useNavigate();
 
   return (
-    <header className="flex-shrink-0 h-16 border-b border-border/30 bg-background/50 backdrop-blur-lg">
+    <header className="flex-shrink-0 h-16 border-b border-border/10 bg-transparent">
       <div className="flex items-center justify-between h-full px-6">
         {/* Logo & Brand */}
         <motion.div

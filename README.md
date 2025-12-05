@@ -11,6 +11,14 @@ A comprehensive microservices platform for orchestrating AI workflows, managing 
 - **Credit System**: Built-in billing and credit management
 - **Modern Frontend**: React + TypeScript + Tailwind CSS UI
 
+## 🐛 Help Wanted: Critical Bug Bounty
+
+We're looking for help fixing a **critical PDF parsing issue** that blocks document analysis. See [`doc/PDF_PARSING_BUG_BOUNTY.md`](doc/PDF_PARSING_BUG_BOUNTY.md) for details.
+
+**Status**: 🔴 Open for contribution  
+**Impact**: Blocks PDF text extraction for all users  
+**Bounty**: Community recognition + future collaboration opportunities
+
 ## 📋 Prerequisites
 
 - **Node.js** 20.x or higher
@@ -172,6 +180,11 @@ See `backend/env.example` for all available options. Key variables:
 - `API_GATEWAY_PORT`: Port for API Gateway (default: 3000)
 - `GOOGLE_CLIENT_ID`: Google OAuth client ID (optional, for OAuth login)
 - `GOOGLE_CLIENT_SECRET`: Google OAuth client secret (optional, for OAuth login)
+- `OUTLOOK_CLIENT_ID`: Microsoft Outlook OAuth client ID (optional, for OAuth login)
+- `OUTLOOK_CLIENT_SECRET`: Microsoft Outlook OAuth client secret (optional, for OAuth login)
+- `OUTLOOK_TENANT`: Microsoft tenant (default: "common" for both personal and work accounts)
+- `ICLOUD_CLIENT_ID`: Apple Service ID (optional, for Sign in with Apple)
+- `ICLOUD_CLIENT_SECRET`: Apple JWT client secret (optional, for Sign in with Apple)
 
 ### Frontend Environment Variables
 
@@ -182,8 +195,10 @@ See `backend/env.example` for all available options. Key variables:
 UAOL supports multiple authentication methods:
 
 - **Email/API Key**: Simple email-based login with auto-generated API keys
-- **OAuth Login**: Sign in with Google (Outlook and iCloud coming soon)
+- **OAuth Login**: Sign in with Google, Microsoft Outlook, or Apple (Sign in with Apple)
   - See [OAUTH_SETUP_GUIDE.md](OAUTH_SETUP_GUIDE.md) for setup instructions
+  - See [OUTLOOK_OAUTH_SETUP.md](OUTLOOK_OAUTH_SETUP.md) for detailed Outlook setup
+  - See [ICLOUD_OAUTH_SETUP.md](ICLOUD_OAUTH_SETUP.md) for Apple Sign In setup
   - Requires OAuth credentials in `backend/.env`
 
 ## 📚 Documentation
@@ -191,6 +206,8 @@ UAOL supports multiple authentication methods:
 - [Backend Quick Start](backend/QUICKSTART.md) - Detailed backend setup guide
 - [Database Setup](backend/DATABASE_SETUP.md) - Database configuration guide
 - [OAuth Setup Guide](OAUTH_SETUP_GUIDE.md) - Complete OAuth authentication setup (Google, Outlook, iCloud)
+- [Outlook OAuth Setup](OUTLOOK_OAUTH_SETUP.md) - Detailed Microsoft Outlook setup guide
+- [Apple Sign In Setup](ICLOUD_OAUTH_SETUP.md) - Apple Sign In (iCloud) setup guide
 - [Frontend Setup](FRONTEND_SETUP.md) - Frontend configuration
 - [Troubleshooting](backend/TROUBLESHOOTING.md) - Common issues and solutions
 
@@ -220,6 +237,10 @@ docker-compose up -d
 - `GET /auth/me` - Get current user
 - `GET /auth/google` - Initiate Google OAuth login
 - `GET /auth/google/callback` - Google OAuth callback
+- `GET /auth/outlook` - Initiate Outlook/Microsoft OAuth login
+- `GET /auth/outlook/callback` - Outlook OAuth callback
+- `GET /auth/icloud` - Initiate Apple Sign In (iCloud OAuth)
+- `GET /auth/icloud/callback` - Apple Sign In callback
 
 ### Tools
 - `GET /tools` - List registered tools

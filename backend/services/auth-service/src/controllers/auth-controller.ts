@@ -40,6 +40,30 @@ function getGoogleOAuthConfig() {
   };
 }
 
+// Helper function to get Outlook OAuth config - prioritizes process.env directly
+function getOutlookOAuthConfig() {
+  // Scopes are static - define them directly here
+  const scopes = [
+    'openid',
+    'email',
+    'profile',
+    'offline_access',
+    'https://graph.microsoft.com/Mail.Read',
+    'https://graph.microsoft.com/Mail.Send',
+    'https://graph.microsoft.com/Calendars.Read',
+    'https://graph.microsoft.com/Calendars.ReadWrite',
+    'https://graph.microsoft.com/Files.Read',
+  ];
+  
+  return {
+    clientId: process.env.OUTLOOK_CLIENT_ID || '',
+    clientSecret: process.env.OUTLOOK_CLIENT_SECRET || '',
+    redirectUri: process.env.OUTLOOK_REDIRECT_URI || 'http://localhost:3000/auth/outlook/callback',
+    tenant: process.env.OUTLOOK_TENANT || 'common',
+    scopes: scopes,
+  };
+}
+
 export const authController = {
   async initiateGoogleOAuth(req: Request, res: Response, next: NextFunction) {
     try {
@@ -120,32 +144,73 @@ export const authController = {
 
   async initiateOutlookOAuth(req: Request, res: Response, next: NextFunction) {
     try {
-      const state = Buffer.from(JSON.stringify({ provider: 'outlook' })).toString('base64');
-      const scopes = config.oauth.outlook.scopes.join(' ');
+      const outlookConfig = getOutlookOAuthConfig();
       
-      const authUrl = `https://login.microsoftonline.com/${config.oauth.outlook.tenant}/oauth2/v2.0/authorize?` +
-        `client_id=${config.oauth.outlook.clientId}&` +
+      logger.info('Checking Outlook OAuth configuration', {
+        hasClientId: !!outlookConfig.clientId,
+        clientIdLength: outlookConfig.clientId?.length || 0,
+        hasClientSecret: !!outlookConfig.clientSecret,
+        tenant: outlookConfig.tenant,
+        redirectUri: outlookConfig.redirectUri,
+      });
+
+      if (!outlookConfig.clientId || outlookConfig.clientId.trim() === '') {
+        logger.error('Outlook OAuth not configured: OUTLOOK_CLIENT_ID is missing or empty');
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'OAUTH_NOT_CONFIGURED',
+            message: 'Outlook OAuth is not configured. Please set OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET in backend/.env',
+          },
+        });
+      }
+      
+      if (!outlookConfig.clientSecret || outlookConfig.clientSecret.trim() === '') {
+        logger.error('Outlook OAuth not configured: OUTLOOK_CLIENT_SECRET is missing or empty');
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'OAUTH_NOT_CONFIGURED',
+            message: 'Outlook OAuth is not configured. Please set OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET in backend/.env',
+          },
+        });
+      }
+
+      const state = Buffer.from(JSON.stringify({ provider: 'outlook' })).toString('base64');
+      const scopes = outlookConfig.scopes.join(' ');
+      
+      logger.info('Initiating Outlook OAuth', {
+        clientId: outlookConfig.clientId.substring(0, 10) + '...',
+        tenant: outlookConfig.tenant,
+        redirectUri: outlookConfig.redirectUri,
+      });
+      
+      const authUrl = `https://login.microsoftonline.com/${outlookConfig.tenant}/oauth2/v2.0/authorize?` +
+        `client_id=${outlookConfig.clientId}&` +
         `response_type=code&` +
-        `redirect_uri=${encodeURIComponent(config.oauth.outlook.redirectUri)}&` +
+        `redirect_uri=${encodeURIComponent(outlookConfig.redirectUri)}&` +
         `response_mode=query&` +
         `scope=${encodeURIComponent(scopes)}&` +
         `state=${state}`;
       
       res.redirect(authUrl);
-    } catch (error) {
+    } catch (error: any) {
+      logger.error('Outlook OAuth initiation error', { error: error.message });
       next(error);
     }
   },
 
   async handleOutlookCallback(req: Request, res: Response, next: NextFunction) {
     try {
+      // Use the same scopes as in the initiation
+      const outlookConfig = getOutlookOAuthConfig();
       await handleOAuthCallback(
         req,
         res,
         'outlook',
         exchangeOutlookCode,
         getOutlookUserInfo,
-        config.oauth.outlook.scopes
+        outlookConfig.scopes
       );
     } catch (error) {
       next(error);
@@ -154,20 +219,49 @@ export const authController = {
 
   async initiateIcloudOAuth(req: Request, res: Response, next: NextFunction) {
     try {
+      // Sign in with Apple only supports: openid, email, name
+      // Note: iCloud services (mail, calendar, drive) are NOT available through Sign in with Apple
+      const clientId = process.env.ICLOUD_CLIENT_ID || config.oauth.icloud.clientId || '';
+      const redirectUri = process.env.ICLOUD_REDIRECT_URI || config.oauth.icloud.redirectUri || 'http://localhost:3000/auth/icloud/callback';
+      
+      logger.info('Checking Apple Sign In configuration', {
+        hasClientId: !!clientId,
+        redirectUri,
+      });
+
+      if (!clientId || clientId.trim() === '') {
+        logger.error('Apple Sign In not configured: ICLOUD_CLIENT_ID is missing or empty');
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'OAUTH_NOT_CONFIGURED',
+            message: 'Apple Sign In is not configured. Please set ICLOUD_CLIENT_ID in backend/.env',
+          },
+        });
+      }
+
       const state = Buffer.from(JSON.stringify({ provider: 'icloud' })).toString('base64');
-      const scopes = config.oauth.icloud.scopes.join(' ');
+      
+      // Sign in with Apple only supports these scopes
+      const scopes = 'openid email name';
+      
+      logger.info('Initiating Apple Sign In', {
+        clientId: clientId.substring(0, 10) + '...',
+        redirectUri,
+      });
       
       // iCloud uses Sign in with Apple
       const authUrl = `https://appleid.apple.com/auth/authorize?` +
-        `client_id=${config.oauth.icloud.clientId}&` +
-        `redirect_uri=${encodeURIComponent(config.oauth.icloud.redirectUri)}&` +
+        `client_id=${clientId}&` +
+        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
         `response_type=code id_token&` +
         `scope=${encodeURIComponent(scopes)}&` +
         `response_mode=form_post&` +
         `state=${state}`;
       
       res.redirect(authUrl);
-    } catch (error) {
+    } catch (error: any) {
+      logger.error('Apple Sign In initiation error', { error: error.message });
       next(error);
     }
   },

@@ -80,6 +80,13 @@ console.log('🔍 Environment check:');
 console.log('  .env path:', envPath);
 console.log('  .env exists:', existsSync(envPath));
 console.log('  OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ SET (' + process.env.OPENAI_API_KEY.substring(0, 20) + '...)' : '✗ NOT SET');
+console.log('  OPENAI_MODEL:', process.env.OPENAI_MODEL || 'gpt-4 (default)');
+console.log('  GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? '✓ SET (' + process.env.GEMINI_API_KEY.substring(0, 20) + '...)' : '✗ NOT SET');
+console.log('  GEMINI_MODEL:', process.env.GEMINI_MODEL || 'gemini-pro (default)');
+console.log('  ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? '✓ SET (' + process.env.ANTHROPIC_API_KEY.substring(0, 20) + '...)' : '✗ NOT SET');
+console.log('  ANTHROPIC_MODEL:', process.env.ANTHROPIC_MODEL || 'claude-3-opus-20240229 (default)');
+console.log('  GOOGLE_CLOUD_VISION_API_KEY:', process.env.GOOGLE_CLOUD_VISION_API_KEY ? '✓ SET (' + process.env.GOOGLE_CLOUD_VISION_API_KEY.substring(0, 20) + '...)' : '✗ NOT SET');
+console.log('  ENABLE_OCR:', process.env.ENABLE_OCR !== 'false' ? '✓ ENABLED' : '✗ DISABLED');
 console.log('  DATABASE_URL:', process.env.DATABASE_URL ? '✓ SET' : '✗ NOT SET');
 
 const app = express();
@@ -146,48 +153,131 @@ app.use((req, res, next) => {
     
     // If user is authenticated (not guest), try to get their API key
     if (!isGuest && user) {
-      const { UserApiKeyModel } = await import('@uaol/shared/database/models/user-api-key');
-      const { decryptApiKey } = await import('@uaol/shared/auth/encryption');
-      const apiKeyModel = new UserApiKeyModel(getDatabasePool());
-      
-      // Determine provider: use requested provider, or default, or first available
-      if (provider && ['openai', 'gemini', 'claude'].includes(provider)) {
-        selectedProvider = provider as 'openai' | 'gemini' | 'claude';
-      } else {
-        // Get default provider
-        const defaultKey = await apiKeyModel.findDefaultByUser(user.user_id);
-        if (defaultKey) {
-          selectedProvider = defaultKey.provider;
+      try {
+        const { UserApiKeyModel } = await import('@uaol/shared/database/models/user-api-key');
+        const { decryptApiKey } = await import('@uaol/shared/auth/encryption');
+        const apiKeyModel = new UserApiKeyModel(getDatabasePool());
+        
+        // Determine provider: use requested provider, or default, or first available
+        if (provider && ['openai', 'gemini', 'claude'].includes(provider)) {
+          selectedProvider = provider as 'openai' | 'gemini' | 'claude';
         } else {
-          // Get first available key
-          const allKeys = await apiKeyModel.listByUser(user.user_id);
-          if (allKeys.length > 0) {
-            selectedProvider = allKeys[0].provider;
+          // Get default provider
+          const defaultKey = await apiKeyModel.findDefaultByUser(user.user_id);
+          if (defaultKey) {
+            selectedProvider = defaultKey.provider;
+            logger.debug('Found default provider', { provider: selectedProvider, userId: user.user_id });
+          } else {
+            // Get first available key
+            const allKeys = await apiKeyModel.listByUser(user.user_id);
+            if (allKeys.length > 0) {
+              selectedProvider = allKeys[0].provider;
+              logger.debug('Using first available provider', { provider: selectedProvider, userId: user.user_id });
+            } else {
+              logger.debug('No user API keys found', { userId: user.user_id });
+            }
           }
         }
-      }
-      
-      // Get the API key for selected provider
-      const userApiKey = await apiKeyModel.findByUserAndProvider(user.user_id, selectedProvider);
-      if (userApiKey) {
-        try {
-          apiKey = decryptApiKey(userApiKey.encrypted_key);
-          logger.info('Using user API key', { provider: selectedProvider, userId: user.user_id });
-        } catch (decryptError: any) {
-          logger.error('Failed to decrypt user API key', { error: decryptError.message });
+        
+        // Get the API key for selected provider
+        if (selectedProvider) {
+          const userApiKey = await apiKeyModel.findByUserAndProvider(user.user_id, selectedProvider);
+          if (userApiKey) {
+            try {
+              apiKey = decryptApiKey(userApiKey.encrypted_key);
+              logger.info('Using user API key', { provider: selectedProvider, userId: user.user_id });
+            } catch (decryptError: any) {
+              logger.error('Failed to decrypt user API key', { 
+                error: decryptError.message,
+                userId: user.user_id,
+                provider: selectedProvider
+              });
+            }
+          } else {
+            logger.debug('No user API key found for provider', { 
+              userId: user.user_id,
+              provider: selectedProvider
+            });
+          }
         }
+      } catch (userKeyError: any) {
+        logger.warn('Error retrieving user API key, falling back to global', {
+          error: userKeyError.message,
+          userId: user.user_id
+        });
       }
     }
     
     // Fallback to global API key if no user key found
-    const rawKey = process.env.OPENAI_API_KEY || '';
     if (!apiKey) {
-      apiKey = rawKey.trim();
-      selectedProvider = 'openai'; // Global key is always OpenAI
-      logger.info('Using global API key fallback');
+      // Try to get global key for the selected provider
+      let rawKey = '';
+      if (selectedProvider === 'openai') {
+        rawKey = process.env.OPENAI_API_KEY || '';
+      } else if (selectedProvider === 'gemini') {
+        rawKey = process.env.GEMINI_API_KEY || '';
+      } else if (selectedProvider === 'claude') {
+        rawKey = process.env.ANTHROPIC_API_KEY || '';
+      }
+      
+      if (rawKey) {
+        apiKey = rawKey.trim();
+        logger.info('Using global API key fallback', {
+          provider: selectedProvider,
+          rawKeyLength: rawKey.length,
+          trimmedKeyLength: apiKey.length,
+          hasWhitespace: rawKey !== rawKey.trim(),
+          userId: user?.user_id,
+          isGuest
+        });
+      } else {
+        // If no key for selected provider, try to find any available global key
+        const availableProviders: Array<{ provider: 'openai' | 'gemini' | 'claude', key: string }> = [];
+        
+        if (process.env.OPENAI_API_KEY?.trim()) {
+          availableProviders.push({ provider: 'openai', key: process.env.OPENAI_API_KEY.trim() });
+        }
+        if (process.env.GEMINI_API_KEY?.trim()) {
+          availableProviders.push({ provider: 'gemini', key: process.env.GEMINI_API_KEY.trim() });
+        }
+        if (process.env.ANTHROPIC_API_KEY?.trim()) {
+          availableProviders.push({ provider: 'claude', key: process.env.ANTHROPIC_API_KEY.trim() });
+        }
+        
+        if (availableProviders.length > 0) {
+          // Use the first available provider
+          const fallback = availableProviders[0];
+          selectedProvider = fallback.provider;
+          apiKey = fallback.key;
+          logger.info('Using first available global API key', {
+            provider: selectedProvider,
+            availableProviders: availableProviders.map(p => p.provider),
+            userId: user?.user_id,
+            isGuest
+          });
+        } else {
+          logger.debug('No global API key available', {
+            requestedProvider: provider || 'default',
+            selectedProvider,
+            userId: user?.user_id,
+            isGuest
+          });
+        }
+      }
     }
     
     if (!apiKey) {
+      logger.warn('No API key found', {
+        userId: user?.user_id,
+        isGuest,
+        requestedProvider: provider || 'default',
+        selectedProvider,
+        hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+        hasGeminiKey: !!process.env.GEMINI_API_KEY,
+        hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+        message: message.substring(0, 100)
+      });
+      
       return res.json({
         success: true,
         data: {
@@ -197,17 +287,23 @@ app.use((req, res, next) => {
       });
     }
     
+    // Clean and validate API key
+    apiKey = apiKey.trim();
+    
     // Log for debugging (but don't log the full key)
     logger.info('API key config check', { 
-      hasEnvKey: !!process.env.OPENAI_API_KEY,
+      hasEnvKey: selectedProvider === 'openai' ? !!process.env.OPENAI_API_KEY :
+                 selectedProvider === 'gemini' ? !!process.env.GEMINI_API_KEY :
+                 !!process.env.ANTHROPIC_API_KEY,
       hasApiKey: !!apiKey,
       provider: selectedProvider,
-      rawKeyLength: rawKey.length,
-      trimmedKeyLength: apiKey ? apiKey.length : 0,
+      keyLength: apiKey ? apiKey.length : 0,
       keyStarts: apiKey ? apiKey.substring(0, 12) + '...' : 'empty',
       keyEnds: apiKey && apiKey.length > 12 ? '...' + apiKey.substring(apiKey.length - 8) : 'empty',
-      keyFormatValid: apiKey ? (selectedProvider === 'openai' ? apiKey.startsWith('sk-') : true) : false,
-      hasWhitespace: rawKey !== rawKey.trim()
+      keyFormatValid: apiKey ? (selectedProvider === 'openai' ? apiKey.startsWith('sk-') : 
+                                selectedProvider === 'claude' ? apiKey.startsWith('sk-ant-') : true) : false,
+      userId: user?.user_id,
+      isGuest
     });
     
     // Validate key format based on provider
@@ -218,6 +314,23 @@ app.use((req, res, next) => {
       if (!aiProvider.validateApiKey(apiKey)) {
         throw new Error(`Invalid ${selectedProvider} API key format`);
       }
+      
+      // Log model configuration
+      const modelEnvVar = selectedProvider === 'openai' ? 'OPENAI_MODEL' :
+                         selectedProvider === 'gemini' ? 'GEMINI_MODEL' :
+                         'ANTHROPIC_MODEL';
+      const defaultModel = selectedProvider === 'openai' ? 'gpt-4' :
+                          selectedProvider === 'gemini' ? 'gemini-pro' :
+                          'claude-3-opus-20240229';
+      const configuredModel = process.env[modelEnvVar] || defaultModel;
+      
+      logger.info('AI provider configured', {
+        provider: selectedProvider,
+        model: configuredModel,
+        modelSource: process.env[modelEnvVar] ? 'env' : 'default',
+        userId: user?.user_id,
+        isGuest
+      });
     } catch (validationError: any) {
       logger.error('Invalid API key format', { 
         provider: selectedProvider,
@@ -346,12 +459,26 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
         provider: selectedProvider,
         error: aiError.message,
         stack: aiError.stack,
+        userId: user?.user_id,
+        isGuest,
+        hasApiKey: !!apiKey,
+        keyFormatValid: apiKey ? (selectedProvider === 'openai' ? apiKey.startsWith('sk-') : true) : false,
       });
       
       // Provide more helpful error messages
       let errorMessage = aiError.message;
-      if (errorMessage.includes('Incorrect API key') || errorMessage.includes('Invalid API key')) {
+      if (errorMessage.includes('Incorrect API key') || 
+          errorMessage.includes('Invalid API key') ||
+          errorMessage.includes('Incorrect API key provided') ||
+          errorMessage.includes('invalid_api_key')) {
         errorMessage = `Incorrect or invalid ${selectedProvider} API key. Please verify your API key is correct and active.`;
+        
+        // Add helpful guidance based on user type
+        if (!isGuest && user) {
+          errorMessage += ' Check your API key settings in the application.';
+        } else {
+          errorMessage += ' If you have your own API key, please configure it in settings. Otherwise, contact the administrator.';
+        }
       }
       
       res.json({
@@ -376,9 +503,14 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
 
   // File upload endpoint
   app.post('/chat/upload', optionalAuthenticate, fileUpload.array('files', 10), async (req, res) => {
+  let user: any;
+  let isGuest: boolean;
+  let files: Express.Multer.File[] = [];
+  
   try {
-    const user = (req as any).user;
-    const files = (req.files as Express.Multer.File[]) || [];
+    user = (req as any).user;
+    isGuest = (req as any).isGuest;
+    files = (req.files as Express.Multer.File[]) || [];
 
     if (!files || files.length === 0) {
       return res.status(400).json({
@@ -390,17 +522,45 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
       });
     }
 
+    // Use user ID if authenticated, otherwise use 'guest' as fallback
+    const userId = user?.user_id || 'guest';
+
     logger.info('File upload request', { 
-      userId: user.user_id, 
+      userId, 
+      isGuest,
       fileCount: files.length,
-      files: files.map(f => ({ name: f.originalname, size: f.size, type: f.mimetype }))
+      files: files.map(f => ({ 
+        name: f.originalname, 
+        size: f.size, 
+        type: f.mimetype,
+        isPDF: f.mimetype === 'application/pdf'
+      }))
     });
 
     // Process all files
     const { processFile } = await import('./services/file-processor.js');
+    
+    logger.info('Starting file processing', {
+      fileCount: files.length,
+      pdfCount: files.filter(f => f.mimetype === 'application/pdf').length
+    });
+    
     const processedFiles = await Promise.all(
-      files.map(file => processFile(file, user.user_id))
+      files.map(async (file, index) => {
+        logger.info(`Processing file ${index + 1}/${files.length}`, {
+          filename: file.originalname,
+          size: file.size,
+          type: file.mimetype
+        });
+        return processFile(file, userId);
+      })
     );
+    
+    logger.info('File processing completed', {
+      totalFiles: processedFiles.length,
+      filesWithText: processedFiles.filter(f => f.extractedText).length,
+      filesWithoutText: processedFiles.filter(f => !f.extractedText).length
+    });
 
     // If files contain text, we can optionally analyze them with AI
     const filesWithText = processedFiles.filter(f => f.extractedText);
@@ -426,14 +586,24 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
       timestamp: new Date().toISOString(),
     });
   } catch (error: any) {
-    logger.error('File upload error', error);
-    res.status(500).json({
-      success: false,
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: error.message || 'Failed to upload files',
-      },
+    logger.error('File upload error', {
+      error: error.message,
+      stack: error.stack,
+      userId: user?.user_id,
+      isGuest: isGuest ?? false,
+      fileCount: files?.length || 0,
     });
+    
+    // Ensure we always return JSON, not HTML
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error.message || 'Failed to upload files',
+        },
+      });
+    }
   }
   });
 
@@ -568,6 +738,27 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
 
   // Start server AFTER all routes are registered
   const port = config.apiGateway.port;
+  // Global error handler - must be AFTER all routes
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    logger.error('Unhandled error', {
+      error: err.message,
+      stack: err.stack,
+      path: req.path,
+      method: req.method,
+    });
+    
+    // Always return JSON, never HTML
+    if (!res.headersSent) {
+      res.status(err.status || 500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: err.message || 'An unexpected error occurred',
+        },
+      });
+    }
+  });
+
   app.listen(port, () => {
     logger.info(`API Gateway listening on port ${port}`);
   });

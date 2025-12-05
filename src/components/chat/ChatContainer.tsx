@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { ChatMessage, Message } from "./ChatMessage";
+import { ChatMessage, Message, UploadedFile } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { WorkflowResultCard, WorkflowResult } from "./WorkflowResultCard";
 import { ApiKeySettings } from "./ApiKeySettings";
@@ -66,6 +66,8 @@ export function ChatContainer() {
   }, [messages]);
 
   const handleSend = async (content: string, files?: File[], provider?: 'openai' | 'gemini' | 'claude') => {
+    let uploadedFiles: UploadedFile[] = [];
+    
     const userMessage: Message = {
       id: `msg-${Date.now()}`,
       role: "user",
@@ -73,6 +75,7 @@ export function ChatContainer() {
         ? `${content || ''}${content ? '\n\n' : ''}[${files.length} file(s) attached: ${files.map(f => f.name).join(', ')}]`
         : content,
       timestamp: new Date(),
+      files: uploadedFiles,
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -85,37 +88,81 @@ export function ChatContainer() {
           const uploadResponse = await apiClient.uploadFiles(files);
           
           if (uploadResponse.success && uploadResponse.data) {
+            // Store uploaded file info
+            uploadedFiles = uploadResponse.data.files.map(f => ({
+              fileId: f.fileId,
+              filename: f.filename,
+              size: f.size,
+              url: f.url,
+              extractedText: f.extractedText,
+              metadata: f.metadata,
+            }));
+            
+            // Update user message with file info
+            setMessages((prev) => prev.map(msg => 
+              msg.id === userMessage.id 
+                ? { ...msg, files: uploadedFiles }
+                : msg
+            ));
+            
             const fileInfo = uploadResponse.data.files
               .map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`)
               .join(', ');
             
+            // If no user message, automatically request summary for PDFs
+            const hasPDFs = uploadedFiles.some(f => f.filename.toLowerCase().endsWith('.pdf'));
+            const hasExtractedText = uploadedFiles.some(f => f.extractedText && f.extractedText.length > 0);
+            
+            if (!content.trim() && hasPDFs && hasExtractedText) {
+              // Auto-generate summary for PDFs
+              content = "Please provide a summary of the uploaded document(s), including key points, main topics, and any important details.";
+            }
+            
             // Add file info to message content if not already included
             if (!content.includes('[file')) {
-              content = `${content}\n\n[${files.length} file(s) uploaded: ${fileInfo}]`;
+              content = `${content}${content ? '\n\n' : ''}[${files.length} file(s) uploaded: ${fileInfo}]`;
             }
             
             // If files have extracted text, include it in the AI context
-            const extractedTexts = uploadResponse.data.files
-              .filter(f => f.extractedText)
-              .map(f => {
-                const metadata = f.metadata || {};
-                const metadataInfo = metadata.pages 
-                  ? ` (${metadata.pages} pages)`
-                  : metadata.rowCount 
-                  ? ` (${metadata.rowCount} rows)`
-                  : '';
-                return `\n\n--- Document: ${f.filename}${metadataInfo} ---\n${f.extractedText}`;
-              })
-              .join('\n\n');
+            const filesWithText = uploadResponse.data.files.filter(f => f.extractedText && f.extractedText.length > 0);
+            const filesWithoutText = uploadResponse.data.files.filter(f => !f.extractedText || f.extractedText.length === 0);
             
-            if (extractedTexts) {
+            if (filesWithText.length > 0) {
+              const extractedTexts = filesWithText
+                .map(f => {
+                  const metadata = f.metadata || {};
+                  const metadataInfo = metadata.pages 
+                    ? ` (${metadata.pages} pages)`
+                    : metadata.rowCount 
+                    ? ` (${metadata.rowCount} rows)`
+                    : '';
+                  return `\n\n--- Document: ${f.filename}${metadataInfo} ---\n${f.extractedText}`;
+                })
+                .join('\n\n');
+              
               content = `${content}\n\n[Document Content Extracted]${extractedTexts}`;
-            } else {
-              // If no text extracted, still mention the files
-              const fileList = uploadResponse.data.files
-                .map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`)
-                .join(', ');
-              content = `${content}\n\n[Files attached: ${fileList} - content extraction not available for this file type]`;
+            }
+            
+            // Handle files without extracted text
+            if (filesWithoutText.length > 0) {
+              const pdfFiles = filesWithoutText.filter(f => f.filename.toLowerCase().endsWith('.pdf'));
+              const otherFiles = filesWithoutText.filter(f => !f.filename.toLowerCase().endsWith('.pdf'));
+              
+              if (pdfFiles.length > 0) {
+                // Check if extraction failed due to error
+                const hasExtractionError = pdfFiles.some(f => f.metadata?.extractionFailed);
+                const errorMessage = hasExtractionError 
+                  ? "Text extraction failed due to a processing error. This may be a scanned PDF requiring OCR, an encrypted PDF, or an unsupported format."
+                  : "Text extraction was not successful. This PDF may be image-based (scanned) and require OCR processing.";
+                
+                const fileList = pdfFiles.map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`).join(', ');
+                content = `${content}\n\n[PDF files uploaded but text extraction failed: ${fileList}]\n\n${errorMessage}\n\nYou can:\n- Try OCR processing if enabled (for scanned PDFs)\n- Ask me to analyze the file if OCR is available\n- Provide the text content manually if needed`;
+              }
+              
+              if (otherFiles.length > 0) {
+                const fileList = otherFiles.map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`).join(', ');
+                content = `${content}\n\n[Files attached: ${fileList} - content extraction not available for this file type]`;
+              }
             }
             
             console.log('Files uploaded successfully', { 
@@ -171,10 +218,25 @@ export function ChatContainer() {
           // Check if it's a placeholder response
           const messageText = response.data.message || response.data.response || "";
           const isPlaceholder = messageText.includes("To enable AI responses") || 
-                                messageText.includes("I received your message");
+                                (messageText.includes("I received your message") && 
+                                 !messageText.includes("However, there was an error"));
           
           if (isPlaceholder) {
-            console.warn("⚠️ Received placeholder response - API key may not be loaded");
+            console.warn("⚠️ Received placeholder response - API key may not be loaded", {
+              message: messageText.substring(0, 200),
+              fullResponse: response.data
+            });
+            
+            // Show a helpful message to guide users to set their API key
+            const assistantMessage: Message = {
+              id: `msg-${Date.now()}-assistant`,
+              role: "assistant",
+              content: `${messageText}\n\n💡 **Tip:** To use AI features, please configure your API key:\n1. Click the Settings icon (⚙️) in the top right\n2. Go to "API Keys" section\n3. Add your OpenAI API key\n4. Set it as default\n\nYou can get an API key from https://platform.openai.com/api-keys`,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+            setIsProcessing(false);
+            return;
           }
           
           const assistantMessage: Message = {
@@ -223,7 +285,45 @@ export function ChatContainer() {
       >
         <div className="max-w-4xl mx-auto space-y-6">
           {messages.map((message, index) => (
-            <ChatMessage key={message.id} message={message} index={index} />
+            <ChatMessage 
+              key={message.id} 
+              message={message} 
+              index={index}
+              onAskAboutDocument={async (file) => {
+                // Create a question prompt about the document
+                const questionContent = `Please provide a detailed summary and analysis of the document "${file.filename}". Include key points, main topics, and important details.\n\n--- Document: ${file.filename}${file.metadata?.pages ? ` (${file.metadata.pages} pages)` : ''} ---\n${file.extractedText || 'No text extracted from this document.'}`;
+                
+                // Add user message
+                const questionMessage: Message = {
+                  id: `msg-${Date.now()}`,
+                  role: "user",
+                  content: `Ask about: ${file.filename}`,
+                  timestamp: new Date(),
+                  files: [file],
+                };
+                setMessages((prev) => [...prev, questionMessage]);
+                setIsProcessing(true);
+                
+                try {
+                  // Send to AI with document context
+                  const response = await apiClient.sendChatMessage(questionContent, undefined, selectedProvider);
+                  
+                  if (response.success && response.data) {
+                    const assistantMessage: Message = {
+                      id: `msg-${Date.now()}-assistant`,
+                      role: "assistant",
+                      content: response.data.response || response.data.message || "I've analyzed the document. How can I help you with it?",
+                      timestamp: new Date(),
+                    };
+                    setMessages((prev) => [...prev, assistantMessage]);
+                  }
+                } catch (error: any) {
+                  console.error('Error asking about document:', error);
+                } finally {
+                  setIsProcessing(false);
+                }
+              }}
+            />
           ))}
 
           {showWorkflow && (
@@ -276,7 +376,7 @@ export function ChatContainer() {
       </div>
 
       {/* Provider Selector */}
-      <div className="flex-shrink-0 px-4 pt-4 pb-2 border-t border-border/30 bg-background/50 backdrop-blur-lg">
+      <div className="flex-shrink-0 px-4 pt-4 pb-2 border-t border-border/10 bg-transparent">
         <div className="max-w-4xl mx-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Provider:</span>
           <div className="flex gap-1">
@@ -307,7 +407,7 @@ export function ChatContainer() {
       </div>
 
       {/* Input Area */}
-      <div className="flex-shrink-0 p-4 pb-6 border-t border-border/30 bg-background/50 backdrop-blur-lg">
+      <div className="flex-shrink-0 p-4 pb-6 border-t border-border/10 bg-transparent">
         <div className="relative">
           <ChatInput 
             onSend={handleSend} 

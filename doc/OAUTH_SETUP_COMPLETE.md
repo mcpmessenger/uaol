@@ -108,3 +108,4 @@ npm run migrate
 - Migration is idempotent (safe to run multiple times)
 - While in testing mode, only users added as test users can sign in
 - For production, app will need to go through Google's verification process
+

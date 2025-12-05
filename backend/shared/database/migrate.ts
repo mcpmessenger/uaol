@@ -83,6 +83,24 @@ async function runMigrations() {
       }
     }
 
+    // Migration: Add vector store support
+    const vectorStoreMigrationPath = join(__dirname, 'migrations', 'add-vector-store.sql');
+    try {
+      const vectorStoreMigration = readFileSync(vectorStoreMigrationPath, 'utf-8');
+      await client.query(vectorStoreMigration);
+      logger.info('Vector store migration completed');
+    } catch (error: any) {
+      // Migration might already be applied - check error code
+      if (error.code === 'ENOENT') {
+        logger.warn('Vector store migration file not found, skipping...');
+      } else if (error.code === '42710' || error.message?.includes('already exists') || error.message?.includes('duplicate key')) {
+        // Object already exists - this is OK, migration already applied
+        logger.info('Vector store migration already applied, skipping...');
+      } else {
+        logger.warn('Vector store migration error (may already be applied):', error.message);
+      }
+    }
+
     logger.info('Database migrations completed successfully');
   } catch (error) {
     logger.error('Migration failed', error);

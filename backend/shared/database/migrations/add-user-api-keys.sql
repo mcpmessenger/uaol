@@ -30,3 +30,4 @@ CREATE TRIGGER update_user_api_keys_updated_at
     BEFORE UPDATE ON user_api_keys
     FOR EACH ROW
     EXECUTE FUNCTION update_user_api_keys_updated_at();
+

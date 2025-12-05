@@ -131,7 +131,26 @@ async function getGoogleUserInfo(accessToken: string): Promise<GoogleUserInfo> {
  * Outlook OAuth: Exchange code for token
  */
 async function exchangeOutlookCode(code: string): Promise<OAuthTokenResponse> {
-  const tokenUrl = `https://login.microsoftonline.com/${config.oauth.outlook.tenant}/oauth2/v2.0/token`;
+  // Use process.env directly with fallback to config
+  const tenant = process.env.OUTLOOK_TENANT || config.oauth.outlook.tenant || 'common';
+  const clientId = process.env.OUTLOOK_CLIENT_ID || config.oauth.outlook.clientId || '';
+  const clientSecret = process.env.OUTLOOK_CLIENT_SECRET || config.oauth.outlook.clientSecret || '';
+  const redirectUri = process.env.OUTLOOK_REDIRECT_URI || config.oauth.outlook.redirectUri || 'http://localhost:3000/auth/outlook/callback';
+  
+  // Get scopes from config
+  const scopes = config.oauth.outlook?.scopes || [
+    'openid',
+    'email',
+    'profile',
+    'offline_access',
+    'https://graph.microsoft.com/Mail.Read',
+    'https://graph.microsoft.com/Mail.Send',
+    'https://graph.microsoft.com/Calendars.Read',
+    'https://graph.microsoft.com/Calendars.ReadWrite',
+    'https://graph.microsoft.com/Files.Read',
+  ];
+  
+  const tokenUrl = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`;
   
   const response = await fetch(tokenUrl, {
     method: 'POST',
@@ -140,17 +159,26 @@ async function exchangeOutlookCode(code: string): Promise<OAuthTokenResponse> {
     },
     body: new URLSearchParams({
       code,
-      client_id: config.oauth.outlook.clientId,
-      client_secret: config.oauth.outlook.clientSecret,
-      redirect_uri: config.oauth.outlook.redirectUri,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
-      scope: config.oauth.outlook.scopes.join(' '),
+      scope: Array.isArray(scopes) ? scopes.join(' ') : scopes,
     }),
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new AuthenticationError(`Outlook token exchange failed: ${error}`);
+    const errorText = await response.text();
+    logger.error('Outlook token exchange failed', {
+      status: response.status,
+      statusText: response.statusText,
+      error: errorText,
+      redirectUri,
+      hasClientId: !!clientId,
+      hasClientSecret: !!clientSecret,
+      tenant,
+    });
+    throw new AuthenticationError(`Outlook token exchange failed (${response.status}): ${errorText}`);
   }
 
   return await response.json();
@@ -176,9 +204,14 @@ async function getOutlookUserInfo(accessToken: string): Promise<OutlookUserInfo>
 /**
  * iCloud OAuth: Exchange code for token
  * Note: iCloud uses Sign in with Apple, which has a different flow
+ * IMPORTANT: Sign in with Apple only provides authentication, NOT access to iCloud services
  */
 async function exchangeIcloudCode(code: string): Promise<OAuthTokenResponse> {
-  // iCloud uses Sign in with Apple OAuth
+  // Use process.env directly with fallback to config
+  const clientId = process.env.ICLOUD_CLIENT_ID || config.oauth.icloud.clientId || '';
+  const clientSecret = process.env.ICLOUD_CLIENT_SECRET || config.oauth.icloud.clientSecret || '';
+  const redirectUri = process.env.ICLOUD_REDIRECT_URI || config.oauth.icloud.redirectUri || 'http://localhost:3000/auth/icloud/callback';
+  
   const tokenUrl = 'https://appleid.apple.com/auth/token';
   
   const response = await fetch(tokenUrl, {
@@ -188,16 +221,24 @@ async function exchangeIcloudCode(code: string): Promise<OAuthTokenResponse> {
     },
     body: new URLSearchParams({
       code,
-      client_id: config.oauth.icloud.clientId,
-      client_secret: config.oauth.icloud.clientSecret, // This is a JWT for Apple
-      redirect_uri: config.oauth.icloud.redirectUri,
+      client_id: clientId,
+      client_secret: clientSecret, // This is a JWT for Apple
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
     }),
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new AuthenticationError(`iCloud token exchange failed: ${error}`);
+    const errorText = await response.text();
+    logger.error('Apple Sign In token exchange failed', {
+      status: response.status,
+      statusText: response.statusText,
+      error: errorText,
+      redirectUri,
+      hasClientId: !!clientId,
+      hasClientSecret: !!clientSecret,
+    });
+    throw new AuthenticationError(`Apple Sign In token exchange failed (${response.status}): ${errorText}`);
   }
 
   return await response.json();

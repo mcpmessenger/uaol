@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Slash, Workflow, Bot, Quote, Settings, Mic, MicOff, Volume2, Paperclip, X, Key, User } from "lucide-react";
+import { Send, Slash, Workflow, Bot, Quote, Settings, Mic, MicOff, Volume2, Paperclip, X, Key, User, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GlassPanel } from "@/components/ui/GlassPanel";
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
+import { generatePDFThumbnail } from "@/lib/pdf-thumbnail";
 
 interface Command {
   name: string;
@@ -31,14 +32,24 @@ interface ChatInputProps {
   onOpenSettings?: () => void;
 }
 
+interface FileWithPreview {
+  file: File;
+  preview?: string; // Base64 thumbnail for PDFs/images
+  type: 'pdf' | 'image' | 'other';
+  loading?: boolean; // Loading state for thumbnail generation
+}
+
 export function ChatInput({ onSend, onVoiceTranscribe, disabled, onOpenSettings }: ChatInputProps) {
   const [input, setInput] = useState("");
   const [showCommands, setShowCommands] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [filesWithPreview, setFilesWithPreview] = useState<FileWithPreview[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
   const { isRecording, startRecording, stopRecording, error: recorderError } = useVoiceRecorder();
 
   const filteredCommands = input.startsWith("/")
@@ -123,6 +134,7 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled, onOpenSettings 
     onSend(message, selectedFiles.length > 0 ? selectedFiles : undefined, provider);
     setInput("");
     setSelectedFiles([]);
+    setFilesWithPreview([]);
     setShowCommands(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -210,15 +222,109 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled, onOpenSettings 
     }
   };
 
+  // Generate preview for files (PDFs and images)
+  const generatePreview = async (file: File): Promise<FileWithPreview> => {
+    const isPDF = file.type === 'application/pdf';
+    const isImage = file.type.startsWith('image/');
+    
+    if (isPDF) {
+      // Generate PDF thumbnail using pdf.js
+      try {
+        const thumbnail = await generatePDFThumbnail(file);
+        return {
+          file,
+          type: 'pdf',
+          preview: thumbnail || undefined,
+          loading: false
+        };
+      } catch (error) {
+        console.error('Failed to generate PDF thumbnail:', error);
+        return {
+          file,
+          type: 'pdf',
+          loading: false
+        };
+      }
+    } else if (isImage) {
+      // For images, create a thumbnail
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          resolve({
+            file,
+            type: 'image',
+            preview: e.target?.result as string,
+            loading: false
+          });
+        };
+        reader.onerror = () => {
+          resolve({ file, type: 'image', loading: false });
+        };
+        reader.readAsDataURL(file);
+      });
+    } else {
+      return { file, type: 'other', loading: false };
+    }
+  };
+
+  const handleFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    
+    // Add files immediately
+    setSelectedFiles((prev) => [...prev, ...files]);
+    
+    // Generate previews for all files
+    const previews: FileWithPreview[] = [];
+    for (const file of files) {
+      const preview = await generatePreview(file);
+      previews.push(preview);
+    }
+    
+    // Update all previews at once
+    setFilesWithPreview((prev) => [...prev, ...previews]);
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    if (files.length > 0) {
-      setSelectedFiles((prev) => [...prev, ...files]);
-    }
+    handleFiles(files);
   };
 
   const removeFile = (index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    setFilesWithPreview((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Drag and drop handlers
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!disabled) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (disabled) return;
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      handleFiles(files);
+    }
   };
 
   const handleUploadClick = () => {
@@ -303,7 +409,17 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled, onOpenSettings 
   };
 
   return (
-    <div className="relative w-full max-w-4xl mx-auto">
+    <div 
+      ref={dropZoneRef}
+      className={cn(
+        "relative w-full max-w-4xl mx-auto",
+        isDragging && "ring-2 ring-primary ring-offset-2 rounded-xl"
+      )}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* Command Autocomplete Menu */}
       <AnimatePresence>
         {showCommands && filteredCommands.length > 0 && (
@@ -355,30 +471,108 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled, onOpenSettings 
         )}
       </AnimatePresence>
 
-      {/* Selected Files Preview */}
-      {selectedFiles.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {selectedFiles.map((file, index) => (
-            <motion.div
-              key={index}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20 text-sm"
-            >
-              <Paperclip className="w-3.5 h-3.5 text-primary" />
-              <span className="text-foreground truncate max-w-[200px]">{file.name}</span>
-              <span className="text-muted-foreground text-xs">
-                ({(file.size / 1024).toFixed(1)} KB)
-              </span>
-              <button
-                onClick={() => removeFile(index)}
-                className="ml-1 p-0.5 hover:bg-primary/20 rounded transition-colors"
-                title="Remove file"
-              >
-                <X className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
-              </button>
-            </motion.div>
-          ))}
+      {/* Drag Overlay */}
+      {isDragging && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 z-50 bg-primary/10 backdrop-blur-sm rounded-xl border-2 border-dashed border-primary flex items-center justify-center"
+        >
+          <div className="text-center">
+            <Paperclip className="w-12 h-12 text-primary mx-auto mb-2" />
+            <p className="text-lg font-medium text-foreground">Drop files here to upload</p>
+            <p className="text-sm text-muted-foreground mt-1">PDFs, images, documents</p>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Selected Files Preview with Thumbnails */}
+      {filesWithPreview.length > 0 && (
+        <div className="mb-3">
+          <div className="flex flex-wrap gap-3">
+            {filesWithPreview.map((fileWithPreview, index) => {
+              const { file, preview, type, loading = false } = fileWithPreview;
+              const isPDF = type === 'pdf';
+              const isImage = type === 'image';
+              
+              return (
+                <motion.div
+                  key={index}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  className="relative group"
+                >
+                  <div className={cn(
+                    "relative overflow-hidden rounded-lg border-2 transition-all",
+                    isPDF 
+                      ? "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800"
+                      : isImage
+                      ? "bg-muted/50 border-primary/20"
+                      : "bg-muted/30 border-muted"
+                  )}>
+                    {/* Thumbnail */}
+                    {isImage && preview ? (
+                      <div className="w-16 h-16 flex items-center justify-center">
+                        <img 
+                          src={preview} 
+                          alt={file.name}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    ) : isPDF ? (
+                      loading ? (
+                        <div className="w-16 h-20 flex flex-col items-center justify-center p-2 bg-muted/30">
+                          <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin mb-1" />
+                          <span className="text-[10px] text-muted-foreground">Loading...</span>
+                        </div>
+                      ) : preview ? (
+                        <div className="w-16 h-20 flex items-center justify-center bg-white dark:bg-gray-900">
+                          <img 
+                            src={preview} 
+                            alt={file.name}
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-16 h-16 flex flex-col items-center justify-center p-2">
+                          <div className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center mb-1">
+                            <FileText className="w-4 h-4 text-red-500" />
+                          </div>
+                          <span className="text-[10px] font-medium text-foreground text-center line-clamp-2">
+                            {file.name}
+                          </span>
+                        </div>
+                      )
+                    ) : (
+                      <div className="w-16 h-16 flex flex-col items-center justify-center p-2">
+                        <Paperclip className="w-4 h-4 text-muted-foreground mb-1" />
+                        <span className="text-[10px] font-medium text-foreground text-center line-clamp-2">
+                          {file.name}
+                        </span>
+                      </div>
+                    )}
+                    
+                    {/* File info overlay */}
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1">
+                      <p className="text-[10px] text-white truncate leading-tight">{file.name}</p>
+                      <p className="text-[10px] text-white/80 leading-tight">{(file.size / 1024).toFixed(1)} KB</p>
+                    </div>
+                    
+                    {/* Remove button */}
+                    <button
+                      onClick={() => removeFile(index)}
+                      className="absolute top-0.5 right-0.5 p-0.5 bg-black/60 hover:bg-red-500 rounded-full transition-colors opacity-0 group-hover:opacity-100"
+                      title="Remove file"
+                    >
+                      <X className="w-2.5 h-2.5 text-white" />
+                    </button>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -470,15 +664,6 @@ export function ChatInput({ onSend, onVoiceTranscribe, disabled, onOpenSettings 
           <Send className="w-5 h-5" />
         </motion.button>
       </GlassPanel>
-
-      {/* Hint */}
-      <p className="text-center text-xs text-muted-foreground mt-3">
-        Press <kbd className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">/</kbd> for commands
-        <span className="mx-2">•</span>
-        <kbd className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">Enter</kbd> to send
-        <span className="mx-2">•</span>
-        Click <Paperclip className="w-3 h-3 inline" /> to upload files
-      </p>
     </div>
   );
 }

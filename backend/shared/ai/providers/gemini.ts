@@ -21,7 +21,7 @@ export class GeminiProvider implements AIProvider {
     messages: ChatMessage[],
     options: ChatCompletionOptions = {}
   ): Promise<string> {
-    const model = options.model || 'gemini-pro';
+    const model = options.model || process.env.GEMINI_MODEL || 'gemini-pro';
     const temperature = options.temperature ?? 0.7;
     const maxTokens = options.maxTokens ?? 2000;
 

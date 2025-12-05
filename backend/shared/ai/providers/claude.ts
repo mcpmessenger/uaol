@@ -20,7 +20,7 @@ export class ClaudeProvider implements AIProvider {
     messages: ChatMessage[],
     options: ChatCompletionOptions = {}
   ): Promise<string> {
-    const model = options.model || 'claude-3-opus-20240229';
+    const model = options.model || process.env.ANTHROPIC_MODEL || 'claude-3-opus-20240229';
     const temperature = options.temperature ?? 0.7;
     const maxTokens = options.maxTokens ?? 2000;
 

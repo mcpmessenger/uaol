@@ -1,4 +1,5 @@
 import { Header } from "@/components/layout/Header";
+import { Footer } from "@/components/layout/Footer";
 import { ChatContainer } from "@/components/chat/ChatContainer";
 import { motion } from "framer-motion";
 
@@ -27,6 +28,7 @@ const Index = () => {
         <main className="flex-1 overflow-hidden">
           <ChatContainer />
         </main>
+        <Footer />
       </div>
     </div>
   );

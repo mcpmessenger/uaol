@@ -93,13 +93,12 @@ export const config = {
       redirectUri: process.env.ICLOUD_REDIRECT_URI || 'http://localhost:3000/auth/icloud/callback',
       teamId: process.env.ICLOUD_TEAM_ID || '',
       keyId: process.env.ICLOUD_KEY_ID || '',
+      // Sign in with Apple only supports: openid, email, name
+      // NOTE: iCloud services (mail, calendar, drive) are NOT available through Sign in with Apple
       scopes: [
         'openid',
         'email',
-        'profile',
-        'https://www.icloud.com/mail',
-        'https://www.icloud.com/calendar',
-        'https://www.icloud.com/drive',
+        'name',
       ],
     };
 

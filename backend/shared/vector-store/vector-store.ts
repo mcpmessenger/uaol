@@ -3,6 +3,7 @@
 
 import { createLogger } from '../logger';
 import { OpenAI } from 'openai';
+import { PostgresVectorStore } from './postgres-vector-store';
 
 const logger = createLogger('vector-store');
 
@@ -33,8 +34,8 @@ export interface DocumentChunk {
 
 /**
  * Vector database interface - implement this for your chosen vector DB
- * This is a placeholder that stores vectors in memory (for development)
- * In production, replace with a real vector database like Pinecone, Weaviate, Qdrant, etc.
+ * This is a fallback that stores vectors in memory (for development)
+ * In production, we use PostgreSQL with pgvector extension
  */
 class InMemoryVectorStore {
   private vectors: Map<string, { embedding: number[]; text: string; metadata: any }> = new Map();
@@ -47,7 +48,7 @@ class InMemoryVectorStore {
         metadata: vector.metadata,
       });
     }
-    logger.info(`Indexed ${vectors.length} vectors`, { totalVectors: this.vectors.size });
+    logger.info(`Indexed ${vectors.length} vectors in memory`, { totalVectors: this.vectors.size });
   }
 
   async query(
@@ -107,8 +108,48 @@ class InMemoryVectorStore {
   }
 }
 
-// Initialize vector store (in-memory for now, replace with real DB in production)
-const vectorDb = new InMemoryVectorStore();
+// Initialize vector stores - try PostgreSQL first, fallback to in-memory
+let postgresStore: PostgresVectorStore | null = null;
+let inMemoryStore: InMemoryVectorStore | null = null;
+let usePostgres: boolean | null = null;
+
+/**
+ * Get the active vector store (PostgreSQL if available, otherwise in-memory)
+ */
+async function getVectorStore(): Promise<PostgresVectorStore | InMemoryVectorStore> {
+  // Check once if we should use PostgreSQL
+  if (usePostgres === null) {
+    try {
+      postgresStore = new PostgresVectorStore();
+      // Try to check if pgvector is available
+      const hasPgvector = await postgresStore.checkPgvectorAvailability();
+      usePostgres = hasPgvector;
+      
+      if (usePostgres) {
+        logger.info('Using PostgreSQL vector store with pgvector');
+      } else {
+        logger.info('Using in-memory vector store (pgvector not available)');
+        inMemoryStore = new InMemoryVectorStore();
+      }
+    } catch (error: any) {
+      logger.warn('Failed to initialize PostgreSQL vector store, using in-memory fallback', {
+        error: error.message,
+      });
+      usePostgres = false;
+      inMemoryStore = new InMemoryVectorStore();
+    }
+  }
+  
+  if (usePostgres && postgresStore) {
+    return postgresStore;
+  }
+  
+  if (!inMemoryStore) {
+    inMemoryStore = new InMemoryVectorStore();
+  }
+  
+  return inMemoryStore;
+}
 
 /**
  * Converts text into a vector embedding using the OpenAI API.
@@ -152,8 +193,9 @@ export async function indexDocumentChunks(fileId: string, chunks: DocumentChunk[
       });
     }
 
-    // Index vectors in the database
-    await vectorDb.upsert(vectors);
+    // Get the active vector store and index vectors
+    const vectorStore = await getVectorStore();
+    await vectorStore.upsert(vectors);
     
     logger.info('Document indexed successfully', { fileId, chunkCount: chunks.length });
   } catch (error: any) {
@@ -176,8 +218,9 @@ export async function queryVectorStore(
     // 1. Create embedding for the user query
     const queryEmbedding = await createEmbedding(query);
 
-    // 2. Query the Vector DB
-    const results = await vectorDb.query(queryEmbedding, { fileId }, topK);
+    // 2. Get the active vector store and query
+    const vectorStore = await getVectorStore();
+    const results = await vectorStore.query(queryEmbedding, { fileId }, topK);
 
     // 3. Extract the text from the top results
     const retrievedTexts = results.map(result => result.text);
@@ -201,7 +244,8 @@ export async function queryVectorStore(
  */
 export async function deleteFileVectors(fileId: string): Promise<void> {
   try {
-    await vectorDb.deleteByFileId(fileId);
+    const vectorStore = await getVectorStore();
+    await vectorStore.deleteByFileId(fileId);
     logger.info('File vectors deleted', { fileId });
   } catch (error: any) {
     logger.error('Failed to delete file vectors', { error: error.message, fileId });

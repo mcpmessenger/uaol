@@ -135,24 +135,52 @@ OUTLOOK_REDIRECT_URI=http://localhost:3000/auth/outlook/callback
 OUTLOOK_TENANT=common
 ```
 
-**Setup Steps:**
-1. Go to [Azure Portal](https://portal.azure.com/)
-2. Navigate to "Azure Active Directory" → "App registrations"
-3. Click "New registration"
-4. Name: "UAOL"
-5. Supported account types: "Accounts in any organizational directory and personal Microsoft accounts"
-6. Redirect URI: `http://localhost:3000/auth/outlook/callback` (Web platform)
-7. After creation, go to "Certificates & secrets" → "New client secret"
-8. Copy the Client ID and Client Secret
-9. Go to "API permissions" → Add:
-   - `Mail.Read`
-   - `Mail.Send`
-   - `Calendars.Read`
-   - `Calendars.ReadWrite`
-   - `Files.Read`
-   - `User.Read` (for profile)
+**📖 For detailed setup instructions, see [OUTLOOK_OAUTH_SETUP.md](OUTLOOK_OAUTH_SETUP.md)**
 
-**Scopes Requested:**
+**Quick Setup Steps:**
+
+1. **Create App Registration in Azure Portal:**
+   - Go to [Azure Portal](https://portal.azure.com/)
+   - Navigate to **"Microsoft Entra ID"** (or "Azure Active Directory") → **"App registrations"**
+   - Click **"+ New registration"**
+   - Name: "UAOL"
+   - Supported account types: **"Accounts in any organizational directory and personal Microsoft accounts"**
+   - Redirect URI: `http://localhost:3000/auth/outlook/callback` (Web platform)
+   - Click **"Register"**
+
+2. **Create Client Secret:**
+   - In your app registration, go to **"Certificates & secrets"**
+   - Click **"+ New client secret"**
+   - Add description and expiration
+   - **IMPORTANT**: Copy the **Value** immediately - you won't see it again!
+   - This is your `OUTLOOK_CLIENT_SECRET`
+
+3. **Configure API Permissions:**
+   - Go to **"API permissions"**
+   - Click **"+ Add a permission"** → **"Microsoft Graph"** → **"Delegated permissions"**
+   - Add these permissions:
+     - ✅ `Mail.Read` - Read user's mail
+     - ✅ `Mail.Send` - Send mail as the user
+     - ✅ `Calendars.Read` - Read user's calendars
+     - ✅ `Calendars.ReadWrite` - Have full access to user's calendars
+     - ✅ `Files.Read` - Read user's OneDrive files
+     - ✅ `User.Read` - Read user's profile (usually already included)
+   - Basic permissions (`openid`, `email`, `profile`, `offline_access`) are automatically included
+
+4. **Get Your Credentials:**
+   - **Client ID**: App registration → Overview → Application (client) ID
+   - **Client Secret**: The value you copied from Certificates & secrets
+   - **Tenant**: Use `common` for both personal and work accounts
+
+5. **Add to `.env`:**
+   ```env
+   OUTLOOK_CLIENT_ID=your-client-id-here
+   OUTLOOK_CLIENT_SECRET=your-client-secret-here
+   OUTLOOK_REDIRECT_URI=http://localhost:3000/auth/outlook/callback
+   OUTLOOK_TENANT=common
+   ```
+
+**Scopes Requested (configured in code):**
 - `openid`, `email`, `profile`, `offline_access`
 - `https://graph.microsoft.com/Mail.Read`
 - `https://graph.microsoft.com/Mail.Send`
@@ -160,59 +188,76 @@ OUTLOOK_TENANT=common
 - `https://graph.microsoft.com/Calendars.ReadWrite`
 - `https://graph.microsoft.com/Files.Read`
 
+**Common Issues:**
+- ❌ **Redirect URI mismatch**: Make sure redirect URI in Azure Portal matches exactly (including http/https, port, path)
+- ❌ **Invalid client secret**: Client secret may have expired - create a new one
+- ❌ **Consent required**: User needs to grant permissions on first login
+
 ### iCloud OAuth (Sign in with Apple)
 
+⚠️ **IMPORTANT**: Sign in with Apple is for **authentication only**. It does NOT provide access to iCloud services (mail, calendar, drive).
+
+**📖 For detailed setup instructions, see [ICLOUD_OAUTH_SETUP.md](ICLOUD_OAUTH_SETUP.md)**
+
 ```env
-ICLOUD_CLIENT_ID=your-apple-client-id
-ICLOUD_CLIENT_SECRET=your-apple-client-secret-jwt
+ICLOUD_CLIENT_ID=your-apple-service-id
+ICLOUD_CLIENT_SECRET=your-generated-jwt-token
 ICLOUD_REDIRECT_URI=http://localhost:3000/auth/icloud/callback
 ICLOUD_TEAM_ID=your-apple-team-id
 ICLOUD_KEY_ID=your-apple-key-id
 ```
 
-**Setup Steps:**
-1. Go to [Apple Developer Portal](https://developer.apple.com/)
-2. Navigate to "Certificates, Identifiers & Profiles"
-3. Create a new App ID (e.g., `com.uaol.app`)
-4. Enable "Sign in with Apple"
-5. Create a Service ID (e.g., `com.uaol.service`)
-6. Configure redirect URLs: `http://localhost:3000/auth/icloud/callback`
-7. Create a Key for "Sign in with Apple" (download the .p8 file)
-8. Note your Team ID and Key ID
-9. Generate a JWT client secret using the .p8 key (see below)
+**Quick Setup Steps:**
 
-**Generating Apple Client Secret (JWT):**
-You need to create a JWT token as the client secret. Use a library like `jsonwebtoken`:
+1. **Create App ID** in Apple Developer Portal:
+   - Go to [Apple Developer Portal](https://developer.apple.com/)
+   - Navigate to "Certificates, Identifiers & Profiles" → "Identifiers"
+   - Create new App ID (e.g., `com.uaol.app`)
+   - Enable "Sign in with Apple"
 
-```javascript
-const jwt = require('jsonwebtoken');
-const fs = require('fs');
+2. **Create Service ID**:
+   - Create new Services ID (e.g., `com.uaol.service`)
+   - Configure "Sign in with Apple"
+   - Add redirect URL: `http://localhost:3000/auth/icloud/callback`
+   - This Service ID is your `ICLOUD_CLIENT_ID`
 
-const teamId = 'YOUR_TEAM_ID';
-const keyId = 'YOUR_KEY_ID';
-const privateKey = fs.readFileSync('path/to/AuthKey_XXXXX.p8');
+3. **Create Key**:
+   - Create a Key for "Sign in with Apple"
+   - Download the `.p8` file (you can only download once!)
+   - Copy the Key ID - this is your `ICLOUD_KEY_ID`
 
-const clientSecret = jwt.sign(
-  {
-    iss: teamId,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 86400 * 180, // 6 months
-    aud: 'https://appleid.apple.com',
-    sub: 'YOUR_CLIENT_ID',
-  },
-  privateKey,
-  {
-    algorithm: 'ES256',
-    keyid: keyId,
-  }
-);
-```
+4. **Get Team ID**:
+   - Go to "Membership" in Apple Developer Portal
+   - Copy your Team ID - this is your `ICLOUD_TEAM_ID`
 
-**Scopes Requested:**
-- `openid`, `email`, `profile`
-- `https://www.icloud.com/mail`
-- `https://www.icloud.com/calendar`
-- `https://www.icloud.com/drive`
+5. **Generate JWT Client Secret**:
+   - You need to generate a JWT token as the client secret
+   - See `ICLOUD_OAUTH_SETUP.md` for JWT generation script
+   - JWT expires after 6 months - you'll need to regenerate it
+
+6. **Add to `.env`**:
+   ```env
+   ICLOUD_CLIENT_ID=com.uaol.service
+   ICLOUD_CLIENT_SECRET=your-generated-jwt-token
+   ICLOUD_REDIRECT_URI=http://localhost:3000/auth/icloud/callback
+   ICLOUD_TEAM_ID=your-team-id
+   ICLOUD_KEY_ID=your-key-id
+   ```
+
+**Scopes Supported (configured in code):**
+- `openid` - Sign in
+- `email` - Email address (only provided on first authorization)
+- `name` - User name (only provided on first authorization)
+
+⚠️ **Note**: The scopes like `https://www.icloud.com/mail` do NOT work with Sign in with Apple. Sign in with Apple only provides authentication, not access to iCloud services.
+
+**Common Issues:**
+- ❌ **Apple Developer Account Required**: $99/year subscription needed
+- ❌ **JWT Expires**: Client secret (JWT) expires after 6 months - regenerate before expiration
+- ❌ **Email Missing**: Apple only provides email on first authorization - store it for subsequent logins
+- ❌ **No iCloud Service Access**: Sign in with Apple doesn't provide access to mail, calendar, or drive
+
+See `ICLOUD_OAUTH_SETUP.md` for detailed troubleshooting and setup.
 
 ## Frontend Configuration
 
