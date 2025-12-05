@@ -61,6 +61,9 @@ check-env.js
 get-db-url.js
 update-imports.js
 
+# Files with potential secrets (user-specific setup files)
+backend/OPENAI_KEY_SETUP_COMPLETE.md
+
 # TypeScript
 *.tsbuildinfo
 
