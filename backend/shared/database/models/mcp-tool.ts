@@ -9,6 +9,7 @@ export enum ToolStatus {
 
 export interface MCPTool {
   tool_id: string;
+  protocol: 'json-rpc' | 'rest';
   name: string;
   gateway_url: string;
   credit_cost_per_call: number;
@@ -25,13 +26,14 @@ export class MCPToolModel {
     name: string,
     gatewayUrl: string,
     creditCostPerCall: number,
-    developerId: string
+    developerId: string,
+    protocol: 'json-rpc' | 'rest' = 'json-rpc' // New parameter with default
   ): Promise<MCPTool> {
     const toolId = randomUUID();
     
     const query = `
-      INSERT INTO mcp_tools (tool_id, name, gateway_url, credit_cost_per_call, developer_id, status, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+      INSERT INTO mcp_tools (tool_id, name, gateway_url, credit_cost_per_call, developer_id, protocol, status, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
       RETURNING *
     `;
     
@@ -41,6 +43,7 @@ export class MCPToolModel {
       gatewayUrl,
       creditCostPerCall,
       developerId,
+      protocol, // New value
       ToolStatus.PENDING,
     ]);
 
@@ -49,13 +52,53 @@ export class MCPToolModel {
 
   async findById(toolId: string): Promise<MCPTool | null> {
     const query = 'SELECT * FROM mcp_tools WHERE tool_id = $1';
-    const result = await this.pool.query(query, [toolId]);
     
-    if (result.rows.length === 0) {
-      return null;
+    // Add detailed logging
+    console.log('[MCPToolModel.findById] Looking for tool:', toolId);
+    console.log('[MCPToolModel.findById] Query:', query);
+    console.log('[MCPToolModel.findById] Pool exists:', !!this.pool);
+    
+    try {
+      const result = await this.pool.query(query, [toolId]);
+      
+      console.log('[MCPToolModel.findById] Query result:', {
+        rowCount: result.rows.length,
+        rows: result.rows.length > 0 ? result.rows.map(r => ({ 
+          tool_id: r.tool_id, 
+          name: r.name, 
+          status: r.status,
+          protocol: r.protocol 
+        })) : []
+      });
+      
+      if (result.rows.length === 0) {
+        console.log('[MCPToolModel.findById] No tool found with ID:', toolId);
+        // Try to see if ANY tools exist
+        const allTools = await this.pool.query('SELECT tool_id, name, status FROM mcp_tools LIMIT 5');
+        console.log('[MCPToolModel.findById] Total tools in database:', allTools.rows.length);
+        if (allTools.rows.length > 0) {
+          console.log('[MCPToolModel.findById] Sample tools:', allTools.rows);
+        }
+        return null;
+      }
+      
+      const tool = this.mapRowToTool(result.rows[0]);
+      console.log('[MCPToolModel.findById] Tool found:', {
+        tool_id: tool.tool_id,
+        name: tool.name,
+        status: tool.status,
+        protocol: tool.protocol
+      });
+      
+      return tool;
+    } catch (error: any) {
+      console.error('[MCPToolModel.findById] Database query error:', {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      });
+      throw error;
     }
-    
-    return this.mapRowToTool(result.rows[0]);
   }
 
   async findByDeveloper(developerId: string): Promise<MCPTool[]> {
@@ -82,6 +125,11 @@ export class MCPToolModel {
     await this.pool.query(query, [creditCost, toolId]);
   }
 
+  async updateProtocol(toolId: string, protocol: 'json-rpc' | 'rest'): Promise<void> {
+    const query = 'UPDATE mcp_tools SET protocol = $1, updated_at = NOW() WHERE tool_id = $2';
+    await this.pool.query(query, [protocol, toolId]);
+  }
+
   private mapRowToTool(row: any): MCPTool {
     return {
       tool_id: row.tool_id,
@@ -89,6 +137,7 @@ export class MCPToolModel {
       gateway_url: row.gateway_url,
       credit_cost_per_call: row.credit_cost_per_call,
       developer_id: row.developer_id,
+      protocol: (row.protocol || 'json-rpc') as 'json-rpc' | 'rest', // New mapping with fallback
       status: row.status as ToolStatus,
       created_at: row.created_at,
       updated_at: row.updated_at,
