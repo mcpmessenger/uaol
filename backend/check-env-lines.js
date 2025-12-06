@@ -68,3 +68,4 @@ if (existsSync(envPath)) {
   console.error('ERROR: .env file not found!');
 }
 
+

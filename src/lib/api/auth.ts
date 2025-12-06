@@ -9,6 +9,7 @@ export interface User {
   email: string;
   subscriptionTier: string;
   credits: string;
+  avatarUrl?: string | null;
 }
 
 class AuthService {

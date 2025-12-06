@@ -6,6 +6,7 @@ export * from './database/models/user-api-key';
 export * from './auth/encryption';
 export * from './database/models/mcp-tool';
 export * from './database/models/processing-job';
+export * from './database/models/workflow';
 export * from './mcp/client';
 export * from './mq/queue';
 export * from './auth/jwt';

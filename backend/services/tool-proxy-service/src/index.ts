@@ -43,10 +43,12 @@ app.get('/health', (req, res) => {
 (async () => {
   const { errorHandler } = await import('./middleware/error-handler');
   const { proxyRoutes } = await import('./routes/proxy');
+  const { toolExecutionRoutes } = await import('./routes/tool-execution');
   const { rateLimiter } = await import('./middleware/rate-limiter');
   
   app.use(rateLimiter);
   app.use('/proxy', proxyRoutes);
+  app.use('/', toolExecutionRoutes);
   app.use(errorHandler);
 
   const port = config.services.toolProxy.port;

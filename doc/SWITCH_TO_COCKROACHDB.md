@@ -3,7 +3,7 @@
 ## Your CockroachDB Connection String
 
 ```
-postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full
+postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full
 ```
 
 ## Step-by-Step Migration
@@ -13,7 +13,7 @@ postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.
 Replace your Supabase connection string with the CockroachDB one:
 
 ```env
-DATABASE_URL=postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full
+DATABASE_URL=postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full
 ```
 
 **Note**: We'll change `/defaultdb` to `/uaol` after creating the database.
@@ -29,7 +29,7 @@ CREATE DATABASE uaol;
 
 Update `backend/.env` to use the `uaol` database:
 ```env
-DATABASE_URL=postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full
+DATABASE_URL=postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full
 ```
 
 ### Step 4: Run Migrations
@@ -67,7 +67,7 @@ Invoke-WebRequest -Uri https://cockroachlabs.cloud/clusters/[YOUR_CLUSTER_ID]/ce
 
 Then update connection string:
 ```env
-DATABASE_URL=postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full&sslrootcert=%APPDATA%\postgresql\root.crt
+DATABASE_URL=postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full&sslrootcert=%APPDATA%\postgresql\root.crt
 ```
 
 ## Quick Checklist

@@ -1,97 +1,97 @@
-# Test After Server Restart
+# Testing After Service Restart
 
-## ✅ Server Restarted Successfully
+## ✅ Services Restarted
 
-All services are running:
-- ✅ API Gateway (port 3000)
-- ✅ Auth Service (port 3001)
-- ✅ Tool Registry (port 3002)
-- ✅ Job Orchestration (port 3003)
-- ✅ Tool Proxy (port 3004)
-- ✅ Billing Service (port 3005)
-- ✅ Storage Service (port 3006)
+All services have been restarted and are running:
+- ✅ Tool Proxy Service listening on port 3004
+- ✅ Database connections established
+- ✅ All services using correct DATABASE_URL
 
-## Now Test PDF Upload
+## 🔍 Next Steps to Verify Fix
 
-### Step 1: Upload a PDF File
+### 1. Check Service Logs
 
-1. Go to your chat interface
-2. Upload a PDF file (the same one you tried before)
-3. Watch the server logs in your terminal
+When you make a request to `/proxy/{toolId}/tools`, look for these log messages in the service output:
 
-### Step 2: Check Server Logs
-
-**Look for these SUCCESS indicators:**
-
-✅ **Good signs:**
 ```
-[file-processor] DOM polyfills loaded for PDF parsing
-[file-processor] Text extracted successfully { textLength: 1234, ... }
-[file-processor] Document indexed for RAG { chunkCount: 5 }
+[MCPToolModel.findById] Looking for tool: 940bb568-d19e-42fa-aa10-d880f5267e1c
+[MCPToolModel.findById] Query: SELECT * FROM mcp_tools WHERE tool_id::uuid = $1::uuid
 ```
 
-❌ **Bad signs (still broken):**
+**If you see `WHERE tool_id::uuid = $1::uuid`**, the fix is being used! ✅
+
+**If you see `WHERE tool_id = $1`** (without `::uuid`), the service is still using old code. ❌
+
+### 2. Test the Endpoint
+
+```bash
+curl http://localhost:3004/proxy/940bb568-d19e-42fa-aa10-d880f5267e1c/tools
 ```
-[file-processor] Could not load DOM polyfills for PDF parsing
-[file-processor] PDF parsing failed { error: "DOMMatrix is not defined" }
-[file-processor] Text extraction failed
+
+**Expected Success Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "name": "...",
+      "description": "...",
+      "inputSchema": {...}
+    }
+  ]
+}
 ```
 
-### Step 3: Check Browser Console
+**If Still Getting Error:**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Tool not found"
+  }
+}
+```
 
-**Look for:**
-- `Files uploaded successfully` with `withText: 1` or more (not 0)
-- No "content extraction not available" message
-- Document content should be included in the chat
+### 3. Check Service Logs for Details
 
-### Step 4: Test Chat
+Look for these messages in the tool-proxy-service logs:
 
-1. After uploading, send a message about the PDF
-2. Check if you get a proper AI response (not API key error)
-3. If API key error persists, check OpenAI dashboard
+- `[MCPToolModel.findById] Looking for tool:` - Shows the tool ID being queried
+- `[MCPToolModel.findById] Query:` - Shows the actual SQL query
+- `[MCPToolModel.findById] Query result:` - Shows if any rows were returned
+- `[MCPToolModel.findById] Tool found:` - Confirms tool was found
+- `[MCPToolModel.findById] No tool found with ID:` - Tool wasn't found
 
-## Expected Results
+### 4. If Tool Still Not Found
 
-### PDF Upload Should Now:
-- ✅ Extract text successfully
-- ✅ Show `withText: > 0` in console
-- ✅ Include document content in chat context
-- ✅ Index for RAG retrieval
-
-### Chat Should:
-- ✅ Work if API key is valid
-- ✅ Use extracted PDF text in responses
-- ✅ Provide relevant answers about the document
-
-## If PDF Still Fails
-
-Check server logs for the exact error:
-- `DOMMatrix is not defined` → Polyfill still not loading
-- `Cannot find package 'dommatrix'` → Package not installed
-- `PDF parsing failed` → Check the specific error message
-
-## If API Key Still Rejected
-
-1. **Verify in OpenAI Dashboard:**
-   - https://platform.openai.com/api-keys
-   - Check if key is active (not revoked)
-   - Check credits/quota
-
-2. **Test key directly:**
+1. **Verify compiled code:**
    ```bash
-   curl https://api.openai.com/v1/models \
-     -H "Authorization: Bearer YOUR_API_KEY"
+   grep "tool_id::uuid" backend/shared/dist/database/models/mcp-tool.js
+   ```
+   Should show the UUID casting query.
+
+2. **Verify tool exists in database:**
+   ```bash
+   node scripts/test-tool-query-simple.js
    ```
 
-3. **If key is invalid:**
-   - Create new key in dashboard
-   - Update `backend/.env`
-   - Restart server again
+3. **Check database connection:**
+   - Verify `DATABASE_URL` in `backend/.env` matches database where tool was inserted
+   - Check service logs show correct DATABASE_URL on startup
 
-## Next Steps
+4. **Verify service restarted:**
+   - Services must be restarted AFTER the rebuild
+   - Check service startup time in logs matches recent restart
 
-1. **Upload a PDF now** and check the results
-2. **Share the server logs** if issues persist
-3. **Check browser console** for `withText` value
+## 📋 Verification Checklist
 
-The server is ready - time to test! 🚀
+- [ ] Services restarted (confirmed from logs)
+- [ ] Service logs show UUID casting query (`WHERE tool_id::uuid = $1::uuid`)
+- [ ] Tool lookup returns success (not "Tool not found")
+- [ ] Service logs show `[MCPToolModel.findById] Tool found`
+
+---
+
+**Status:** 🔍 Testing in Progress  
+**Services:** ✅ Restarted and Running

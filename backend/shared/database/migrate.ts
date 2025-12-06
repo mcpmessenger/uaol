@@ -101,6 +101,24 @@ async function runMigrations() {
       }
     }
 
+    // Migration: Add protocol column to mcp_tools
+    const protocolMigrationPath = join(__dirname, 'migrations', 'add-protocol-column.sql');
+    try {
+      const protocolMigration = readFileSync(protocolMigrationPath, 'utf-8');
+      await client.query(protocolMigration);
+      logger.info('Protocol column migration completed');
+    } catch (error: any) {
+      // Migration might already be applied - check error code
+      if (error.code === 'ENOENT') {
+        logger.warn('Protocol column migration file not found, skipping...');
+      } else if (error.code === '42710' || error.message?.includes('already exists') || error.message?.includes('duplicate key') || error.message?.includes('column') && error.message?.includes('already exists')) {
+        // Object already exists - this is OK, migration already applied
+        logger.info('Protocol column migration already applied, skipping...');
+      } else {
+        logger.warn('Protocol column migration error (may already be applied):', error.message);
+      }
+    }
+
     logger.info('Database migrations completed successfully');
   } catch (error) {
     logger.error('Migration failed', error);

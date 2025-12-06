@@ -68,9 +68,83 @@ class ApiClient {
         headers,
       });
 
+      // Handle rate limiting
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After');
+        const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining');
+        const rateLimitReset = response.headers.get('X-RateLimit-Reset');
+        
+        if (typeof window !== 'undefined') {
+          const { toast } = await import('@/hooks/use-toast');
+          toast({
+            variant: 'destructive',
+            title: 'Rate Limit Exceeded',
+            description: retryAfter 
+              ? `Please wait ${retryAfter} seconds before trying again.`
+              : 'Too many requests. Please wait a moment and try again.',
+          });
+        }
+        
+        return {
+          success: false,
+          error: {
+            code: 'RATE_LIMIT_ERROR',
+            message: 'Rate limit exceeded. Please try again later.',
+            details: { retryAfter, rateLimitRemaining, rateLimitReset },
+          },
+        };
+      }
+
+      // Handle 401 Unauthorized - redirect to login
+      if (response.status === 401) {
+        this.clearToken();
+        if (typeof window !== 'undefined') {
+          const { toast } = await import('@/hooks/use-toast');
+          toast({
+            variant: 'destructive',
+            title: 'Session Expired',
+            description: 'Please sign in again to continue.',
+          });
+          // Redirect to login after a short delay
+          setTimeout(() => {
+            window.location.href = '/login';
+          }, 1000);
+        }
+        
+        return {
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'Your session has expired. Please sign in again.',
+          },
+        };
+      }
+
+      // Handle 500 Server Error
+      if (response.status >= 500) {
+        if (typeof window !== 'undefined') {
+          const { toast } = await import('@/hooks/use-toast');
+          toast({
+            variant: 'destructive',
+            title: 'Server Error',
+            description: 'Something went wrong on our end. Please try again in a moment.',
+          });
+        }
+      }
+
       const data = await response.json();
 
       if (!response.ok) {
+        // Show user-friendly error message
+        if (typeof window !== 'undefined' && response.status !== 401 && response.status !== 429) {
+          const { toast } = await import('@/hooks/use-toast');
+          toast({
+            variant: 'destructive',
+            title: 'Error',
+            description: data.error?.message || `HTTP ${response.status}: ${response.statusText}`,
+          });
+        }
+
         return {
           success: false,
           error: data.error || {
@@ -82,6 +156,20 @@ class ApiClient {
 
       return data;
     } catch (error: any) {
+      // Handle network errors
+      if (typeof window !== 'undefined') {
+        const { toast } = await import('@/hooks/use-toast');
+        const isOffline = !navigator.onLine;
+        
+        toast({
+          variant: 'destructive',
+          title: isOffline ? 'You\'re Offline' : 'Network Error',
+          description: isOffline 
+            ? 'Please check your internet connection and try again.'
+            : 'Unable to connect to the server. Please try again.',
+        });
+      }
+
       return {
         success: false,
         error: {
@@ -137,6 +225,33 @@ class ApiClient {
     return this.request(`/tools/${toolId}`);
   }
 
+  async registerTool(tool: {
+    name: string;
+    gateway_url: string;
+    credit_cost_per_call?: number;
+    protocol?: 'json-rpc' | 'rest';
+  }): Promise<ApiResponse<any>> {
+    return this.request('/tools', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: tool.name,
+        gateway_url: tool.gateway_url,
+        credit_cost_per_call: tool.credit_cost_per_call || 1,
+        protocol: tool.protocol || 'json-rpc',
+      }),
+    });
+  }
+
+  async approveTool(toolId: string): Promise<ApiResponse<any>> {
+    return this.request(`/tools/${toolId}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async getToolMethods(toolId: string): Promise<ApiResponse<any>> {
+    return this.request(`/proxy/${toolId}/tools`);
+  }
+
   // Chat/Workflow endpoints
   async sendChatMessage(message: string, fileId?: string, provider?: 'openai' | 'gemini' | 'claude'): Promise<ApiResponse<any>> {
     return this.request('/chat', {
@@ -169,6 +284,61 @@ class ApiClient {
 
   async deleteApiKey(provider: 'openai' | 'gemini' | 'claude'): Promise<ApiResponse<any>> {
     return this.request(`/api-keys/${provider}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Workflow endpoints
+  async createWorkflow(workflow: any): Promise<ApiResponse<{ workflowId: string }>> {
+    return this.request('/workflows', {
+      method: 'POST',
+      body: JSON.stringify(workflow),
+    });
+  }
+
+  async getWorkflows(): Promise<ApiResponse<{ workflows: any[] }>> {
+    return this.request('/workflows');
+  }
+
+  async getWorkflow(workflowId: string): Promise<ApiResponse<any>> {
+    return this.request(`/workflows/${workflowId}`);
+  }
+
+  async executeWorkflow(workflowId: string, inputs?: Record<string, any>): Promise<ApiResponse<{ jobId: string }>> {
+    return this.request(`/workflows/${workflowId}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ inputs }),
+    });
+  }
+
+  async getWorkflowExecutionStatus(jobId: string): Promise<ApiResponse<any>> {
+    return this.request(`/jobs/${jobId}`);
+  }
+
+  // Billing endpoints
+  async getCredits(): Promise<ApiResponse<{ credits: string }>> {
+    return this.request('/billing/credits');
+  }
+
+  // User profile endpoints
+  async getProfile(): Promise<ApiResponse<any>> {
+    return this.request('/users/profile');
+  }
+
+  async updateProfile(profile: { email?: string; avatarUrl?: string | null }): Promise<ApiResponse<any>> {
+    return this.request('/users/profile', {
+      method: 'PUT',
+      body: JSON.stringify(profile),
+    });
+  }
+
+  // File/Document management endpoints
+  async listFiles(): Promise<ApiResponse<Array<{ fileId: string; filename: string; key: string; url: string }>>> {
+    return this.request('/storage/files');
+  }
+
+  async deleteFile(fileId: string): Promise<ApiResponse<any>> {
+    return this.request(`/storage/files/${fileId}`, {
       method: 'DELETE',
     });
   }

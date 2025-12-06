@@ -155,113 +155,113 @@ export async function convertPdfPagesToImages(
   
   try {
     // First, get the page count using pdf-parse
-    // pdf-parse exports PDFParse as a CLASS that requires 'new'
-    // Error: "Class constructor PDFParse cannot be invoked without 'new'"
     await ensurePolyfillsLoaded();
+    
+    // Use namespace import to get the full module object
     const pdfParseModule = await import('pdf-parse');
     
-    // PDFParse is a class - we need to wrap it to use 'new'
-    let pdfParseFn: any;
+    // Determine the correct function export
+    // In ESM, pdf-parse v2.4.5 may export as namespace object without default
+    // Try multiple strategies to get the parsing function
+    let pdfParse: any;
     
-    if (pdfParseModule.PDFParse && typeof pdfParseModule.PDFParse === 'function') {
-      // PDFParse is a class - check if it has a static parse method or needs instantiation
-      if (pdfParseModule.PDFParse.parse && typeof pdfParseModule.PDFParse.parse === 'function') {
-        // Static method
-        pdfParseFn = pdfParseModule.PDFParse.parse;
-      } else {
-        // Need to instantiate with 'new' - the instance might be thenable
-        pdfParseFn = (buffer: Buffer) => {
-          return new pdfParseModule.PDFParse(buffer);
-        };
-      }
-    } else if (pdfParseModule.default && typeof pdfParseModule.default === 'function') {
-      pdfParseFn = pdfParseModule.default;
-    } else if (typeof pdfParseModule === 'function') {
-      pdfParseFn = pdfParseModule;
-    } else {
-      // If it's still not a function, log detailed info
-      const moduleKeys = Object.keys(pdfParseModule);
-      logger.error('pdf-parse import structure', {
-        keys: moduleKeys,
-        hasDefault: !!pdfParseModule.default,
-        defaultType: typeof pdfParseModule.default,
-        hasPDFParse: !!pdfParseModule.PDFParse,
-        PDFParseType: typeof pdfParseModule.PDFParse,
-        moduleType: typeof pdfParseModule
-      });
-      const moduleKeys = Object.keys(pdfParseModule);
-      logger.error('pdf-parse import structure', {
-        keys: moduleKeys,
-        hasDefault: !!pdfParseModule.default,
-        defaultType: typeof pdfParseModule.default,
-        hasPDFParse: !!pdfParseModule.PDFParse,
-        PDFParseType: typeof pdfParseModule.PDFParse,
-        moduleType: typeof pdfParseModule,
-        pdfParseType: typeof pdfParse
-      });
-      
-      // Try using createRequire for CommonJS fallback in ESM context
+    // Strategy 1: Check for default export (traditional function API)
+    if ((pdfParseModule as any).default && typeof (pdfParseModule as any).default === 'function') {
+      pdfParse = (pdfParseModule as any).default;
+    }
+    // Strategy 2: If module itself is a function (CommonJS interop)
+    else if (typeof pdfParseModule === 'function') {
+      pdfParse = pdfParseModule;
+    }
+    // Strategy 3: Use createRequire to get CommonJS version (most reliable for pdf-parse)
+    // The CommonJS version should have the traditional function API
+    else {
       try {
         const { createRequire } = await import('module');
         const require = createRequire(import.meta.url);
-        const pdfParseRequire = require('pdf-parse');
-        // CommonJS might export differently
-        const pdfParseCJS = pdfParseRequire.PDFParse || pdfParseRequire.default || pdfParseRequire;
-        if (typeof pdfParseCJS !== 'function') {
-          throw new Error(`CommonJS pdf-parse also not a function: ${typeof pdfParseCJS}`);
-        }
-        const pdfData = await pdfParseCJS(pdfBuffer);
-        const totalPages = pdfData.numpages || 1;
+        const pdfParseCJS = require('pdf-parse');
         
-        const pagesToConvert = Math.min(totalPages, maxPages);
-        
-        logger.info('Converting PDF pages to images (using require fallback)', {
-          totalPages,
-          pagesToConvert,
-          maxPages,
-        });
-
-        // Convert each page
-        const pageImages: PDFPageImage[] = [];
-        
-        for (let pageNum = 1; pageNum <= pagesToConvert; pageNum++) {
-          try {
-            const imageBuffer = await convertPdfPageToImage(pdfBuffer, pageNum, options);
-            
-            if (imageBuffer) {
-              pageImages.push({
-                pageNumber: pageNum,
-                imageBuffer,
-                format: options.format || 'jpeg',
-              });
-            } else {
-              logger.warn(`Failed to convert page ${pageNum} to image`);
-            }
-          } catch (pageError: any) {
-            logger.warn(`Error converting page ${pageNum}`, {
-              error: pageError.message,
-              pageNum,
-            });
+        // CommonJS export: could be the function directly, or module.exports with default
+        // Try multiple ways to get the function
+        if (typeof pdfParseCJS === 'function') {
+          pdfParse = pdfParseCJS;
+        } else if (pdfParseCJS.default && typeof pdfParseCJS.default === 'function') {
+          pdfParse = pdfParseCJS.default;
+        } else if (pdfParseCJS.pdfParse && typeof pdfParseCJS.pdfParse === 'function') {
+          pdfParse = pdfParseCJS.pdfParse;
+        } else {
+          // Last resort: check if PDFParse class exists and wrap it
+          if (pdfParseCJS.PDFParse && typeof pdfParseCJS.PDFParse === 'function') {
+            // Wrap PDFParse class to work like a function
+            pdfParse = async (buffer: Buffer) => {
+              const parser = new pdfParseCJS.PDFParse({ data: buffer });
+              const textResult = await parser.getText();
+              
+              let numpages = 1;
+              if (parser.pages && Array.isArray(parser.pages)) {
+                numpages = parser.pages.length;
+              } else if (parser.pageCount) {
+                numpages = parser.pageCount;
+              }
+              
+              return {
+                text: textResult?.text || textResult || '',
+                numpages: numpages,
+                info: parser.info || {},
+                metadata: parser.metadata || {}
+              };
+            };
+          } else {
+            throw new Error('CommonJS require did not return a usable function or class');
           }
         }
-
-        logger.info('PDF pages converted to images', {
-          totalPages,
-          convertedPages: pageImages.length,
-          failedPages: pagesToConvert - pageImages.length,
+        
+        logger.debug('Using CommonJS require for pdf-parse', {
+          isFunction: typeof pdfParse === 'function',
+          cjsType: typeof pdfParseCJS,
+          hasDefault: !!pdfParseCJS.default
         });
-
-        return pageImages;
       } catch (requireError: any) {
-        logger.error('Both import and require failed for pdf-parse', {
-          importError: `expected function, got ${typeof pdfParse}`,
-          requireError: requireError.message
-        });
-        throw new Error(`pdf-parse import failed: expected function, got ${typeof pdfParse}. Module keys: ${moduleKeys.join(', ')}`);
+        // If createRequire fails, try PDFParse class from ESM module as last resort
+        if (pdfParseModule.PDFParse && typeof pdfParseModule.PDFParse === 'function') {
+          pdfParse = async (buffer: Buffer) => {
+            const parser = new pdfParseModule.PDFParse({ data: buffer });
+            const textResult = await parser.getText();
+            
+            let numpages = 1;
+            if (parser.pages && Array.isArray(parser.pages)) {
+              numpages = parser.pages.length;
+            } else if (parser.pageCount) {
+              numpages = parser.pageCount;
+            }
+            
+            return {
+              text: textResult?.text || textResult || '',
+              numpages: numpages,
+              info: parser.info || {},
+              metadata: parser.metadata || {}
+            };
+          };
+          logger.debug('Using PDFParse class API from ESM module as fallback');
+        } else {
+          // Log detailed error
+          const moduleKeys = Object.keys(pdfParseModule);
+          logger.error('pdf-parse import failed: module did not resolve to a function', {
+            keys: moduleKeys,
+            hasDefault: !!(pdfParseModule as any).default,
+            defaultType: typeof (pdfParseModule as any).default,
+            hasPDFParse: !!pdfParseModule.PDFParse,
+            PDFParseType: typeof pdfParseModule.PDFParse,
+            pdfParseType: typeof pdfParse,
+            moduleType: typeof pdfParseModule,
+            requireError: requireError.message
+          });
+          throw new Error(`PDF parsing module did not resolve to a function. Got type: ${typeof pdfParse}. Module keys: ${moduleKeys.join(', ')}`);
+        }
       }
     }
     
-    const pdfData = await pdfParseFn(pdfBuffer);
+    const pdfData = await pdfParse(pdfBuffer);
     const totalPages = pdfData.numpages || 1;
     
     const pagesToConvert = Math.min(totalPages, maxPages);

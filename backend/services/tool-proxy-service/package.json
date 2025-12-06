@@ -11,8 +11,11 @@
   },
   "dependencies": {
     "@uaol/shared": "*",
+    "@phukon/duckduckgo-search": "^1.0.0",
+    "axios": "^1.6.0",
     "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "playwright": "^1.40.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

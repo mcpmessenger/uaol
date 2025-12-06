@@ -9,6 +9,9 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import AuthCallback from "./pages/AuthCallback";
 import Privacy from "./pages/Privacy";
+import WorkflowBuilderPage from "./pages/WorkflowBuilderPage";
+import Profile from "./pages/Profile";
+import Tools from "./pages/Tools";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -33,6 +36,9 @@ const App = () => (
               <Route path="/login" element={<Login />} />
               <Route path="/auth/callback" element={<AuthCallback />} />
               <Route path="/privacy" element={<Privacy />} />
+              <Route path="/workflow" element={<WorkflowBuilderPage />} />
+              <Route path="/profile" element={<Profile />} />
+              <Route path="/tools" element={<Tools />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>

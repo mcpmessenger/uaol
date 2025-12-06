@@ -695,6 +695,39 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
   const apiKeysRouter = await import('./routes/api-keys.js');
   app.use('/api-keys', apiKeysRouter.default);
   
+  // Handle OAuth callbacks that are missing /auth prefix (common misconfiguration)
+  app.get('/google/callback', (req, res) => {
+    logger.warn('OAuth callback received without /auth prefix', { 
+      originalUrl: req.originalUrl,
+      query: req.query 
+    });
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_REDIRECT_URI',
+        message: 'Invalid OAuth callback URL. Please update your Google OAuth console to use: http://localhost:3000/auth/google/callback (with /auth prefix)',
+        expected: 'http://localhost:3000/auth/google/callback',
+        received: req.originalUrl,
+      },
+    });
+  });
+
+  app.get('/outlook/callback', (req, res) => {
+    logger.warn('OAuth callback received without /auth prefix', { 
+      originalUrl: req.originalUrl,
+      query: req.query 
+    });
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_REDIRECT_URI',
+        message: 'Invalid OAuth callback URL. Please update your Outlook OAuth console to use: http://localhost:3000/auth/outlook/callback (with /auth prefix)',
+        expected: 'http://localhost:3000/auth/outlook/callback',
+        received: req.originalUrl,
+      },
+    });
+  });
+
   // Proxy routes to services
   app.use('/auth', createProxyMiddleware({
     target: `http://localhost:${config.services.auth.port}`,
@@ -702,11 +735,26 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
     pathRewrite: { '^/auth': '' }, // Strip /auth prefix before forwarding
   }));
 
+  // Proxy /users routes to auth service (user profile, password, etc.)
+  app.use('/users', createProxyMiddleware({
+    target: `http://localhost:${config.services.auth.port}`,
+    changeOrigin: true,
+    pathRewrite: { '^/users': '/users' }, // Keep /users prefix when forwarding
+  }));
+
   app.use('/tools', createProxyMiddleware({
     target: `http://localhost:${config.services.toolRegistry.port}`,
     changeOrigin: true,
     pathRewrite: { '^/tools': '/tools' },
   }));
+
+  // Workflow management endpoints
+  const { workflowController } = await import('./controllers/workflow-controller.js');
+  app.post('/workflows', optionalAuthenticate, workflowController.createWorkflow);
+  app.get('/workflows', optionalAuthenticate, workflowController.getWorkflows);
+  app.get('/workflows/:workflowId', optionalAuthenticate, workflowController.getWorkflow);
+  app.post('/workflows/:workflowId/execute', optionalAuthenticate, workflowController.executeWorkflow);
+  app.get('/workflows/tools/:nodeType', optionalAuthenticate, workflowController.getAvailableTools);
 
   app.use('/jobs', createProxyMiddleware({
     target: `http://localhost:${config.services.jobOrchestration.port}`,

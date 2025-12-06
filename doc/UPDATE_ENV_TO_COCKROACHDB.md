@@ -7,7 +7,7 @@ Your migrations are still connecting to **Supabase** instead of **CockroachDB**.
 ## Your CockroachDB Connection String
 
 ```
-postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full
+postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full
 ```
 
 **Note**: Changed `/defaultdb` to `/uaol` since you've created the `uaol` database.
@@ -17,7 +17,7 @@ postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.
 Open `backend/.env` and find the `DATABASE_URL` line. Replace it with:
 
 ```env
-DATABASE_URL=postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full
+DATABASE_URL=postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full
 ```
 
 ## Step 2: Handle SSL Certificate (if needed)
@@ -37,14 +37,14 @@ Invoke-WebRequest -Uri https://cockroachlabs.cloud/clusters/88af7680-8ba8-4039-9
 
 Then update connection string:
 ```env
-DATABASE_URL=postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full&sslrootcert=%APPDATA%\postgresql\root.crt
+DATABASE_URL=postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=verify-full&sslrootcert=%APPDATA%\postgresql\root.crt
 ```
 
 ### Option B: Use `sslmode=require` (Simpler, Less Secure)
 
 Change `sslmode=verify-full` to `sslmode=require`:
 ```env
-DATABASE_URL=postgresql://will:5UVtZ9CPRR1YIhxWXDCKkQ@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=require
+DATABASE_URL=postgresql://[username]:[password]@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol?sslmode=require
 ```
 
 ## Step 3: Verify Connection String
@@ -64,7 +64,7 @@ npm run migrate
 
 **Expected Output:**
 ```
-[DB Connection] Creating pool with CockroachDB URL: postgresql://will:****@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol...
+[DB Connection] Creating pool with CockroachDB URL: postgresql://[username]:****@uaol-cluster-10969.jxf.gcp-us-central1.cockroachlabs.cloud:26257/uaol...
 [DB Connection] ✅ Database connection established
 [info] Database migrations completed successfully
 ```

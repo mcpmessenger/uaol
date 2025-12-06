@@ -848,81 +848,176 @@ async function extractTextAndMetadata(
       
       let pdfData;
       try {
-        const pdfParseModule = await import('pdf-parse');
-        // pdf-parse exports PDFParse as a CLASS that requires 'new'
-        // Error: "Class constructor PDFParse cannot be invoked without 'new'"
-        // We need to instantiate it with 'new PDFParse(buffer)'
-        let pdfParseFn: any;
-        
-        if (pdfParseModule.PDFParse && typeof pdfParseModule.PDFParse === 'function') {
-          // PDFParse is a class - check if it has a static parse method or needs instantiation
-          if (pdfParseModule.PDFParse.parse && typeof pdfParseModule.PDFParse.parse === 'function') {
-            // Static method
-            pdfParseFn = pdfParseModule.PDFParse.parse;
-          } else {
-            // Need to instantiate with 'new' - the instance might be thenable
-            pdfParseFn = (buffer: Buffer) => {
-              return new pdfParseModule.PDFParse(buffer);
-            };
-          }
-        } else if (pdfParseModule.default && typeof pdfParseModule.default === 'function') {
-          pdfParseFn = pdfParseModule.default;
-        } else if (typeof pdfParseModule === 'function') {
-          pdfParseFn = pdfParseModule;
-        } else {
-          throw new Error(`pdf-parse import failed: PDFParse is ${typeof pdfParseModule.PDFParse}, default is ${typeof pdfParseModule.default}`);
+        // Validate PDF buffer first
+        if (!file.buffer || file.buffer.length === 0) {
+          throw new Error('PDF buffer is empty');
         }
         
-        logger.debug('pdf-parse imported successfully, parsing PDF buffer...', {
+        // Check PDF magic bytes (%PDF)
+        if (file.buffer.length < 4 || 
+            file.buffer[0] !== 0x25 || 
+            file.buffer[1] !== 0x50 || 
+            file.buffer[2] !== 0x44 || 
+            file.buffer[3] !== 0x46) {
+          throw new Error('Invalid PDF file: missing PDF magic bytes (%PDF)');
+        }
+        
+        // Simplified pdf-parse import strategy - use CommonJS require as primary method
+        // This is more reliable for pdf-parse v2.4.5
+        let pdfParse: any;
+        
+        try {
+          const { createRequire } = await import('module');
+          const require = createRequire(import.meta.url);
+          const pdfParseCJS = require('pdf-parse');
+          
+          // pdf-parse v2.4.5 exports PDFParse class, not a function
+          // Handle both old function API and new class API
+          if (typeof pdfParseCJS === 'function') {
+            pdfParse = pdfParseCJS;
+          } else if (pdfParseCJS.default && typeof pdfParseCJS.default === 'function') {
+            pdfParse = pdfParseCJS.default;
+          } else if (pdfParseCJS.PDFParse && typeof pdfParseCJS.PDFParse === 'function') {
+            // New class-based API - wrap it to work like a function
+            const PDFParseClass = pdfParseCJS.PDFParse;
+            pdfParse = async (buffer: Buffer) => {
+              const parser = new PDFParseClass({ data: buffer });
+              const result = await parser.getText();
+              return {
+                text: result.text || '',
+                numpages: result.total || 1,
+                info: result.info || {},
+                metadata: result.metadata || {}
+              };
+            };
+            logger.debug('Using pdf-parse PDFParse class API');
+          } else {
+            // Try ESM import as fallback
+            const pdfParseModule = await import('pdf-parse');
+            if ((pdfParseModule as any).default && typeof (pdfParseModule as any).default === 'function') {
+              pdfParse = (pdfParseModule as any).default;
+            } else if (typeof pdfParseModule === 'function') {
+              pdfParse = pdfParseModule;
+            } else if ((pdfParseModule as any).PDFParse && typeof (pdfParseModule as any).PDFParse === 'function') {
+              // ESM class export
+              const PDFParseClass = (pdfParseModule as any).PDFParse;
+              pdfParse = async (buffer: Buffer) => {
+                const parser = new PDFParseClass({ data: buffer });
+                const result = await parser.getText();
+                return {
+                  text: result.text || '',
+                  numpages: result.total || 1,
+                  info: result.info || {},
+                  metadata: result.metadata || {}
+                };
+              };
+              logger.debug('Using pdf-parse PDFParse class API (ESM)');
+            } else {
+              throw new Error('pdf-parse module did not export a function or PDFParse class');
+            }
+          }
+        } catch (importError: any) {
+          logger.error('Failed to import pdf-parse', { 
+            error: importError.message,
+            stack: importError.stack
+          });
+          throw new Error(`Failed to load PDF parser: ${importError.message}`);
+        }
+        
+        if (typeof pdfParse !== 'function') {
+          logger.error('pdf-parse did not resolve to a function', {
+            type: typeof pdfParse,
+            isObject: typeof pdfParse === 'object',
+            keys: typeof pdfParse === 'object' ? Object.keys(pdfParse || {}) : []
+          });
+          throw new Error('pdf-parse did not resolve to a function');
+        }
+        
+        logger.debug('pdf-parse loaded successfully, parsing PDF...', {
           bufferLength: file.buffer.length,
-          suppressedWarnings: suppressedWarnings.length,
-          usingPDFParse: !!pdfParseModule.PDFParse,
-          usingNew: !!pdfParseModule.PDFParse
+          pdfParseType: typeof pdfParse
         });
         
-        // Parse PDF with timeout protection
+        // Parse PDF with timeout protection and size limit
+        const maxSize = 50 * 1024 * 1024; // 50MB limit
+        if (file.buffer.length > maxSize) {
+          throw new Error(`PDF file too large: ${(file.buffer.length / 1024 / 1024).toFixed(2)}MB (max ${maxSize / 1024 / 1024}MB)`);
+        }
+        
         pdfData = await Promise.race([
-          pdfParseFn(file.buffer),
+          pdfParse(file.buffer),
           new Promise<never>((_, reject) => 
-            setTimeout(() => reject(new Error('PDF parsing timeout after 30 seconds')), 30000)
+            setTimeout(() => reject(new Error('PDF parsing timeout after 60 seconds')), 60000)
           )
         ]) as any;
+        
+        // Validate parsed result
+        if (!pdfData || typeof pdfData !== 'object') {
+          throw new Error('PDF parsing returned invalid result');
+        }
         
         // Restore console.warn
         console.warn = originalWarn;
       } catch (parseError: any) {
         // Restore console.warn even on error
         console.warn = originalWarn;
+        
+        // Check for specific error types
+        const isCorrupted = parseError.message?.includes('corrupt') || 
+                           parseError.message?.includes('invalid') ||
+                           parseError.message?.includes('malformed');
+        const isTimeout = parseError.message?.includes('timeout');
+        const isTooLarge = parseError.message?.includes('too large');
+        
         logger.error('PDF parse failed during execution', {
           error: parseError.message,
           errorType: parseError.constructor?.name,
           bufferSize: file.buffer.length,
           filename: file.originalname,
-          suppressedWarnings: suppressedWarnings.length,
-          willTryOCR: enableOCRFlag
+          isCorrupted,
+          isTimeout,
+          isTooLarge,
+          willTryOCR: enableOCRFlag && !isCorrupted && !isTooLarge
         });
         
-        // If OCR is enabled, don't throw - try OCR fallback instead
-        if (enableOCRFlag) {
+        // If OCR is enabled and it's not a corruption/size issue, try OCR fallback
+        if (enableOCRFlag && !isCorrupted && !isTooLarge) {
           logger.info('Native PDF parsing failed, will attempt OCR fallback');
           nativeParseSucceeded = false;
-          // Fall through to OCR fallback below
-          throw parseError; // Still throw to trigger OCR fallback in catch block
+          throw parseError; // Throw to trigger OCR fallback in catch block
+        }
+        
+        // For corrupted or too-large files, provide better error message
+        if (isCorrupted) {
+          throw new Error(`PDF file appears to be corrupted: ${parseError.message}`);
+        }
+        if (isTooLarge) {
+          throw new Error(`PDF file is too large: ${parseError.message}`);
         }
         
         throw parseError;
       }
       
       let text = pdfData.text || '';
-      metadata.pages = pdfData.numpages;
+      const numPages = pdfData.numpages || pdfData.numPages || 1;
+      metadata.pages = numPages;
       nativeParseSucceeded = true;
       
+      // Validate extracted text
+      if (typeof text !== 'string') {
+        logger.warn('PDF parsing returned non-string text, converting...', {
+          textType: typeof text,
+          hasText: !!text
+        });
+        text = String(text || '');
+      }
+      
       logger.info('PDF parsed successfully', {
-        pages: pdfData.numpages,
+        pages: numPages,
         textLength: text.length,
         hasText: text.length > 0,
         filename: file.originalname,
-        preview: text.length > 0 ? text.substring(0, 200) : '(no text extracted)',
+        preview: text.length > 0 ? text.substring(0, 200).replace(/\n/g, ' ') : '(no text extracted)',
         info: pdfData.info ? Object.keys(pdfData.info) : [],
         metadata: pdfData.metadata ? Object.keys(pdfData.metadata) : []
       });
@@ -943,7 +1038,7 @@ async function extractTextAndMetadata(
       // Step 2: Detect if PDF is scanned (image-based) or native (text-based)
       // Use enableOCRFlag from outer scope to avoid variable shadowing
       // If no text extracted, assume it's scanned and try OCR
-      const isScanned = enableOCRFlag ? (hasNoText || await detectScannedPDF(file.buffer, text, pdfData.numpages)) : false;
+      const isScanned = enableOCRFlag ? (hasNoText || await detectScannedPDF(file.buffer, text, numPages)) : false;
       
       logger.info('PDF text extraction status', {
         filename: file.originalname,
@@ -963,15 +1058,21 @@ async function extractTextAndMetadata(
           
           logger.info('PDF appears to be scanned, converting pages to images for OCR', {
             nativeTextLength: text.length,
-            pages: pdfData.numpages,
+            pages: numPages,
           });
           
           // Convert PDF pages to images
           const maxPagesForOCR = parseInt(process.env.MAX_PDF_PAGES_FOR_OCR || '10', 10);
+          const pagesToProcess = Math.min(numPages, maxPagesForOCR);
+          
+          if (numPages > maxPagesForOCR) {
+            logger.warn(`PDF has ${numPages} pages, but OCR is limited to ${maxPagesForOCR} pages to control costs`);
+          }
+          
           const pageImages = await convertPdfPagesToImages(file.buffer, {
             format: 'jpeg',
             density: 200, // Good quality for OCR
-            maxPages: maxPagesForOCR,
+            maxPages: pagesToProcess,
           });
           
           if (pageImages.length === 0) {
@@ -1140,16 +1241,39 @@ async function extractTextAndMetadata(
           toString() { return 'matrix(1,0,0,1,0,0)'; }
         };
         
-        // Retry once with emergency polyfill
+        // Retry once with emergency polyfill using simplified import
         try {
           logger.info('Retrying PDF parsing with emergency DOMMatrix polyfill');
-          const pdfParseModule = await import('pdf-parse');
-          const pdfParse = pdfParseModule.default || pdfParseModule;
-          const pdfData = await pdfParse(file.buffer);
+          
+          const { createRequire } = await import('module');
+          const require = createRequire(import.meta.url);
+          const pdfParseCJS = require('pdf-parse');
+          
+          const pdfParse = typeof pdfParseCJS === 'function' 
+            ? pdfParseCJS 
+            : (pdfParseCJS.default || pdfParseCJS);
+          
+          if (typeof pdfParse !== 'function') {
+            throw new Error('pdf-parse did not resolve to a function on retry');
+          }
+          
+          const pdfData = await Promise.race([
+            pdfParse(file.buffer),
+            new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error('PDF parsing timeout after 60 seconds')), 60000)
+            )
+          ]) as any;
+          
+          if (!pdfData || typeof pdfData !== 'object') {
+            throw new Error('PDF parsing returned invalid result on retry');
+          }
+          
           const text = pdfData.text || '';
-          metadata.pages = pdfData.numpages;
+          const numPages = pdfData.numpages || pdfData.numPages || 1;
+          metadata.pages = numPages;
+          
           logger.info('PDF parsing succeeded on retry with emergency polyfill', {
-            pages: pdfData.numpages,
+            pages: numPages,
             textLength: text.length
           });
           return { text, metadata };
@@ -1262,6 +1386,25 @@ async function extractTextAndMetadata(
       (metadata as any).extractionError = error.message;
       (metadata as any).extractionFailed = true;
       (metadata as any).ocrAttempted = enableOCRFlag && file.mimetype === 'application/pdf';
+      (metadata as any).errorType = error.constructor?.name || 'UnknownError';
+      (metadata as any).errorDetails = {
+        message: error.message,
+        isCorrupted: error.message?.includes('corrupt') || error.message?.includes('invalid') || error.message?.includes('malformed'),
+        isTimeout: error.message?.includes('timeout'),
+        isTooLarge: error.message?.includes('too large'),
+        isDOMMatrixError: error.message?.includes('DOMMatrix'),
+        isImportError: error.message?.includes('Cannot find module') || error.message?.includes('import'),
+      };
+      
+      logger.error('PDF extraction completely failed, returning empty result', {
+        filename: file.originalname,
+        error: error.message,
+        errorType: error.constructor?.name,
+        bufferSize: file.buffer.length,
+        hasDOMMatrix: typeof globalThis.DOMMatrix !== 'undefined',
+        ocrAttempted: enableOCRFlag && file.mimetype === 'application/pdf',
+        metadata: (metadata as any)
+      });
       
       return {
         text: undefined,

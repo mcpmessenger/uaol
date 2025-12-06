@@ -23,7 +23,7 @@
     "openai": "^6.9.1",
     "pdf-parse": "^2.4.5",
     "pdf2pic": "^3.2.0",
-    "pdfjs-dist": "^4.0.379",
+    "pdfjs-dist": "^3.4.120",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

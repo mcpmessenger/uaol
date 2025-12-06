@@ -1,23 +1,10 @@
 /**
  * MCP (Model Context Protocol) Client
- * Handles communication with MCP-compliant tools
+ * Handles communication with MCP-compliant tools using an adapter pattern
+ * to support different protocol styles (JSON-RPC, REST).
  */
 
-export interface MCPRequest {
-  method: string;
-  params?: Record<string, any>;
-  id?: string;
-}
-
-export interface MCPResponse {
-  result?: any;
-  error?: {
-    code: number;
-    message: string;
-    data?: any;
-  };
-  id?: string;
-}
+import { IMCPProtocolAdapter, JsonRpcAdapter, RestAdapter } from './adapters';
 
 export interface MCPToolCall {
   tool_id: string;
@@ -25,81 +12,33 @@ export interface MCPToolCall {
   arguments: Record<string, any>;
 }
 
+export type MCPProtocol = 'json-rpc' | 'rest';
+
 export class MCPClient {
-  constructor(private gatewayUrl: string, private apiKey?: string) {}
+  private adapter: IMCPProtocolAdapter;
+
+  constructor(
+    private gatewayUrl: string,
+    private protocol: MCPProtocol = 'json-rpc', // Default to existing JSON-RPC
+    private apiKey?: string
+  ) {
+    switch (protocol) {
+      case 'rest':
+        this.adapter = new RestAdapter(gatewayUrl, apiKey);
+        break;
+      case 'json-rpc':
+      default:
+        this.adapter = new JsonRpcAdapter(gatewayUrl, apiKey);
+        break;
+    }
+  }
 
   async callTool(toolCall: MCPToolCall): Promise<any> {
-    const request: MCPRequest = {
-      method: 'tools/call',
-      params: {
-        name: toolCall.name,
-        arguments: toolCall.arguments,
-      },
-      id: this.generateRequestId(),
-    };
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    if (this.apiKey) {
-      headers['Authorization'] = `Bearer ${this.apiKey}`;
-    }
-
-    const response = await fetch(this.gatewayUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(request),
-    });
-
-    if (!response.ok) {
-      throw new Error(`MCP request failed: ${response.statusText}`);
-    }
-
-    const mcpResponse = await response.json() as MCPResponse;
-
-    if (mcpResponse.error) {
-      throw new Error(`MCP error: ${mcpResponse.error.message}`);
-    }
-
-    return mcpResponse.result;
+    return this.adapter.callTool(toolCall);
   }
 
-  async listTools(): Promise<string[]> {
-    const request: MCPRequest = {
-      method: 'tools/list',
-      id: this.generateRequestId(),
-    };
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    if (this.apiKey) {
-      headers['Authorization'] = `Bearer ${this.apiKey}`;
-    }
-
-    const response = await fetch(this.gatewayUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(request),
-    });
-
-    if (!response.ok) {
-      throw new Error(`MCP request failed: ${response.statusText}`);
-    }
-
-    const mcpResponse = await response.json() as MCPResponse;
-
-    if (mcpResponse.error) {
-      throw new Error(`MCP error: ${mcpResponse.error.message}`);
-    }
-
-    return mcpResponse.result?.tools || [];
-  }
-
-  private generateRequestId(): string {
-    return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  async listTools(): Promise<any> {
+    return this.adapter.listTools();
   }
 }
 

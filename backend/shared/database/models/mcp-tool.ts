@@ -51,7 +51,9 @@ export class MCPToolModel {
   }
 
   async findById(toolId: string): Promise<MCPTool | null> {
-    const query = 'SELECT * FROM mcp_tools WHERE tool_id = $1';
+    // Use explicit UUID casting for CockroachDB compatibility
+    // This ensures proper UUID type matching in the database
+    const query = 'SELECT * FROM mcp_tools WHERE tool_id::uuid = $1::uuid';
     
     // Add detailed logging
     console.log('[MCPToolModel.findById] Looking for tool:', toolId);

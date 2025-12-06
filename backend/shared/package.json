@@ -35,6 +35,10 @@
       "types": "./dist/database/models/processing-job.d.ts",
       "default": "./dist/database/models/processing-job.js"
     },
+    "./database/models/workflow": {
+      "types": "./dist/database/models/workflow.d.ts",
+      "default": "./dist/database/models/workflow.js"
+    },
     "./mcp/client": {
       "types": "./dist/mcp/client.d.ts",
       "default": "./dist/mcp/client.js"
@@ -89,7 +93,9 @@
     "jsonwebtoken": "^9.0.2",
     "openai": "^6.9.1",
     "pg": "^8.11.3",
-    "pgvector": "^0.1.8"
+    "pgvector": "^0.1.8",
+    "kafkajs": "^2.2.4",
+    "@aws-sdk/client-sqs": "^3.490.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.5",

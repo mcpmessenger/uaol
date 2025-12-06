@@ -414,6 +414,9 @@ export const authController = {
   async getCurrentUser(req: Request, res: Response, next: NextFunction) {
     try {
       const user = (req as any).user;
+      // Safely access avatar_url - it might not exist if column wasn't added yet
+      const avatarUrl = user.hasOwnProperty('avatar_url') ? (user.avatar_url || null) : null;
+      
       res.json({
         success: true,
         data: {
@@ -421,9 +424,11 @@ export const authController = {
           email: user.email,
           subscriptionTier: user.subscription_tier,
           credits: user.current_credits.toString(),
+          avatarUrl: avatarUrl,
         },
       });
     } catch (error) {
+      logger.error('Error in getCurrentUser', { error });
       next(error);
     }
   },

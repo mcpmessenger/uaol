@@ -10,12 +10,12 @@ The key is in `.env` file but server shows `✗ NOT SET`.
 
 1. **Delete the entire line:**
    ```
-   GOOGLE_CLOUD_VISION_API_KEY=AIzaSyC8u9QCT1H_ZRk-HnkzI_npzD-Cofoowk4
+   GOOGLE_CLOUD_VISION_API_KEY=YOUR_API_KEY_HERE
    ```
 
 2. **Type it fresh:**
    ```
-   GOOGLE_CLOUD_VISION_API_KEY=AIzaSyC8u9QCT1H_ZRk-HnkzI_npzD-Cofoowk4
+   GOOGLE_CLOUD_VISION_API_KEY=YOUR_API_KEY_HERE
    ```
 
 3. **Save the file** (Ctrl+S)

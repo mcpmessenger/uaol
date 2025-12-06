@@ -15,6 +15,22 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Install Chromium and dependencies for Playwright
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    font-noto-emoji
+
+# Set environment variables for Playwright to use system Chromium
+# In Alpine, chromium is typically at /usr/bin/chromium-browser or /usr/bin/chromium
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
 COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/services/tool-proxy-service/dist ./dist
 COPY --from=builder /app/services/tool-proxy-service/package.json ./

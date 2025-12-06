@@ -226,6 +226,49 @@
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground));
   }
+
+  /* React Flow Controls - Dark Mode Visibility */
+  .react-flow__controls {
+    background: hsl(var(--card) / 0.95) !important;
+    border: 1px solid hsl(var(--border)) !important;
+    border-radius: 0.5rem !important;
+    box-shadow: 0 4px 12px hsl(0 0% 0% / 0.3) !important;
+  }
+
+  .dark .react-flow__controls {
+    background: hsl(var(--card) / 0.95) !important;
+    border: 1px solid hsl(var(--border) / 0.8) !important;
+  }
+
+  .react-flow__controls-button {
+    background: hsl(var(--card)) !important;
+    border: 1px solid hsl(var(--border)) !important;
+    border-bottom: 1px solid hsl(var(--border)) !important;
+    color: hsl(var(--foreground)) !important;
+    transition: all 0.2s ease !important;
+  }
+
+  .dark .react-flow__controls-button {
+    background: hsl(var(--card)) !important;
+    border-color: hsl(var(--border) / 0.8) !important;
+    color: hsl(var(--foreground)) !important;
+  }
+
+  .react-flow__controls-button:hover {
+    background: hsl(var(--accent)) !important;
+    color: hsl(var(--accent-foreground)) !important;
+    border-color: hsl(var(--accent)) !important;
+  }
+
+  .dark .react-flow__controls-button:hover {
+    background: hsl(var(--accent)) !important;
+    color: hsl(var(--accent-foreground)) !important;
+  }
+
+  .react-flow__controls-button svg {
+    fill: currentColor !important;
+    stroke: currentColor !important;
+  }
 }
 
 @layer utilities {

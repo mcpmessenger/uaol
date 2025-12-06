@@ -29,6 +29,10 @@ const logger = createLogger('billing-service');
 const app = express();
 
 app.use(cors());
+
+// Stripe webhook needs raw body for signature verification
+app.use('/billing/webhook/stripe', express.raw({ type: 'application/json' }));
+
 app.use(express.json());
 
 app.get('/health', (req, res) => {
@@ -43,10 +47,8 @@ app.get('/health', (req, res) => {
 (async () => {
   const { errorHandler } = await import('./middleware/error-handler');
   const { billingRoutes } = await import('./routes/billing');
-  const { creditRoutes } = await import('./routes/credits');
   
   app.use('/billing', billingRoutes);
-  app.use('/credits', creditRoutes);
   app.use(errorHandler);
 
   const port = config.services.billing.port;

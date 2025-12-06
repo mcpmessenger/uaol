@@ -60,11 +60,11 @@ export class GeminiProvider implements AIProvider {
     );
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } })) as { error?: { message?: string } };
       throw new Error(error.error?.message || `Gemini API error: ${response.statusText}`);
     }
 
-    const data = await response.json();
-    return data.candidates[0]?.content?.parts[0]?.text || '';
+    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   }
 }

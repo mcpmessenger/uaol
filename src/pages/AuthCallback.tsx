@@ -26,6 +26,8 @@ export default function AuthCallback() {
         if (token) {
           try {
             apiClient.setToken(token);
+            // Dispatch event to notify Header component to refresh user data
+            window.dispatchEvent(new Event('user-logged-in'));
             setStatus("success");
             setTimeout(() => {
               navigate("/");

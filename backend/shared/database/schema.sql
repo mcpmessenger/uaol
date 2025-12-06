@@ -23,7 +23,22 @@ CREATE TABLE IF NOT EXISTS mcp_tools (
     gateway_url TEXT NOT NULL,
     credit_cost_per_call INTEGER NOT NULL DEFAULT 1,
     developer_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    protocol TEXT NOT NULL DEFAULT 'json-rpc' CHECK (protocol IN ('json-rpc', 'rest')),
     status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Approved', 'Disabled')),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- Note: For existing databases without the protocol column, run the migration:
+-- backend/shared/database/migrations/add-protocol-column.sql
+
+-- Workflows table (Workflow Builder)
+CREATE TABLE IF NOT EXISTS workflows (
+    workflow_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    workflow_definition JSONB NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
@@ -48,6 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_developer ON mcp_tools(developer_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_status ON mcp_tools(status);
+CREATE INDEX IF NOT EXISTS idx_workflows_user ON workflows(user_id);
+CREATE INDEX IF NOT EXISTS idx_workflows_created ON workflows(created_at);
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_user ON processing_jobs(user_id);
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_status ON processing_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_created ON processing_jobs(created_at);
@@ -56,6 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_processing_jobs_created ON processing_jobs(create
 -- CockroachDB requires dropping trigger before replacing function
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 DROP TRIGGER IF EXISTS update_mcp_tools_updated_at ON mcp_tools;
+DROP TRIGGER IF EXISTS update_workflows_updated_at ON workflows;
 DROP TRIGGER IF EXISTS update_processing_jobs_updated_at ON processing_jobs;
 DROP FUNCTION IF EXISTS update_updated_at_column();
 
@@ -73,6 +91,10 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 
 DROP TRIGGER IF EXISTS update_mcp_tools_updated_at ON mcp_tools;
 CREATE TRIGGER update_mcp_tools_updated_at BEFORE UPDATE ON mcp_tools
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_workflows_updated_at ON workflows;
+CREATE TRIGGER update_workflows_updated_at BEFORE UPDATE ON workflows
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_processing_jobs_updated_at ON processing_jobs;

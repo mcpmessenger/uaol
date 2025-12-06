@@ -50,11 +50,11 @@ export class ClaudeProvider implements AIProvider {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } })) as { error?: { message?: string } };
       throw new Error(error.error?.message || `Claude API error: ${response.statusText}`);
     }
 
-    const data = await response.json();
-    return data.content[0]?.text || '';
+    const data = await response.json() as { content?: Array<{ text?: string }> };
+    return data.content?.[0]?.text || '';
   }
 }

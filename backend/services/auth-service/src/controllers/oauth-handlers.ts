@@ -34,6 +34,7 @@ interface OutlookUserInfo {
   mail: string;
   userPrincipalName: string;
   displayName: string;
+  photo?: string; // Will be fetched separately
 }
 
 interface IcloudUserInfo {
@@ -186,6 +187,7 @@ async function exchangeOutlookCode(code: string): Promise<OAuthTokenResponse> {
 
 /**
  * Outlook OAuth: Get user info
+ * Note: Microsoft Graph photo requires authentication, so we'll use a proxy endpoint
  */
 async function getOutlookUserInfo(accessToken: string): Promise<OutlookUserInfo> {
   const response = await fetch('https://graph.microsoft.com/v1.0/me', {
@@ -198,7 +200,29 @@ async function getOutlookUserInfo(accessToken: string): Promise<OutlookUserInfo>
     throw new AuthenticationError('Failed to fetch Outlook user info');
   }
 
-  return await response.json();
+  const userInfo = await response.json();
+  
+  // Check if user has a photo (we'll use a proxy endpoint to serve it)
+  // The photo endpoint requires authentication, so we'll store a reference
+  // and proxy it through our backend
+  try {
+    const photoResponse = await fetch('https://graph.microsoft.com/v1.0/me/photo', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    
+    if (photoResponse.ok) {
+      // User has a photo - we'll use a proxy endpoint
+      // Store a marker that this user has a photo from Outlook
+      userInfo.photo = 'outlook'; // Marker to indicate photo exists
+    }
+  } catch (error) {
+    logger.warn('Failed to check Outlook photo', { error });
+    // Continue without photo - it's optional
+  }
+
+  return userInfo;
 }
 
 /**
@@ -340,6 +364,47 @@ export async function handleOAuthCallback(
     if (!user) {
       user = await userModel.create(email);
       logger.info('New user created via OAuth', { email, provider });
+    }
+
+    // Extract and store avatar URL from OAuth provider
+    let avatarUrl: string | null = null;
+    if (provider === 'google' && userInfo.picture) {
+      // Google provides a public picture URL that we can use directly
+      avatarUrl = userInfo.picture;
+      logger.info('Google OAuth user info', { 
+        hasPicture: !!userInfo.picture, 
+        pictureUrl: userInfo.picture?.substring(0, 50) + '...',
+        email: userInfo.email 
+      });
+    } else if (provider === 'google') {
+      logger.warn('Google OAuth user info missing picture', { 
+        userInfoKeys: Object.keys(userInfo),
+        email: userInfo.email 
+      });
+    }
+    // Note: Outlook photos require authentication and would need a proxy endpoint
+    // Note: iCloud/Apple doesn't provide profile pictures via Sign in with Apple
+
+    // Update user avatar if we have one (don't fail login if this fails)
+    if (avatarUrl) {
+      try {
+        await userModel.updateAvatarUrl(user.user_id, avatarUrl);
+        logger.info('User avatar updated successfully', { 
+          userId: user.user_id, 
+          provider, 
+          avatarUrl: avatarUrl.substring(0, 50) + '...' 
+        });
+      } catch (avatarError: any) {
+        // Log error but don't fail the OAuth flow
+        logger.warn('Failed to update user avatar (non-critical)', {
+          userId: user.user_id,
+          provider,
+          error: avatarError.message,
+          stack: avatarError.stack,
+        });
+      }
+    } else {
+      logger.info('No avatar URL to update', { userId: user.user_id, provider });
     }
 
     // Store OAuth tokens

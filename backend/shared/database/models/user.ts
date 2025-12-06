@@ -18,6 +18,7 @@ export interface User {
   is_guest?: boolean;
   session_id?: string;
   expires_at?: Date;
+  avatar_url?: string;
 }
 
 export class UserModel {
@@ -159,6 +160,21 @@ export class UserModel {
     return `uaol_${randomUUID().replace(/-/g, '')}_${Date.now().toString(36)}`;
   }
 
+  async updateAvatarUrl(userId: string, avatarUrl: string | null): Promise<void> {
+    try {
+      const query = 'UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE user_id = $2';
+      await this.pool.query(query, [avatarUrl, userId]);
+    } catch (error: any) {
+      // If avatar_url column doesn't exist, log warning but don't fail
+      // This allows the system to work even if migration hasn't been run
+      if (error.message?.includes('column "avatar_url"') || error.code === '42703') {
+        console.warn('avatar_url column does not exist. Please run migration: backend/shared/database/migrations/add-avatar-url.sql');
+        return;
+      }
+      throw error;
+    }
+  }
+
   private mapRowToUser(row: any): User {
     return {
       user_id: row.user_id,
@@ -171,6 +187,8 @@ export class UserModel {
       is_guest: row.is_guest || false,
       session_id: row.session_id || undefined,
       expires_at: row.expires_at ? new Date(row.expires_at) : undefined,
+      // Handle avatar_url gracefully - it might not exist if migration hasn't been run
+      avatar_url: row.hasOwnProperty('avatar_url') ? (row.avatar_url || undefined) : undefined,
     };
   }
 }

@@ -1,8 +1,10 @@
 import { ProcessingJobModel, JobStatus } from '@uaol/shared/database/models/processing-job';
 import { MCPToolModel } from '@uaol/shared/database/models/mcp-tool';
+import { UserModel } from '@uaol/shared/database/models/user';
 import { createLogger } from '@uaol/shared/logger';
 import { createConsumer } from '@uaol/shared/mq/queue';
 import { MCPClient } from '@uaol/shared/mcp/client';
+import { config } from '@uaol/shared/config';
 
 const logger = createLogger('job-orchestration-service');
 
@@ -27,6 +29,15 @@ async function getToolModel(): Promise<MCPToolModel> {
     toolModel = new MCPToolModel(getDatabasePool());
   }
   return toolModel;
+}
+
+let userModel: UserModel | null = null;
+async function getUserModel(): Promise<UserModel> {
+  if (!userModel) {
+    const { getDatabasePool } = await import('@uaol/shared/database/connection');
+    userModel = new UserModel(getDatabasePool());
+  }
+  return userModel;
 }
 
 class JobProcessor {
@@ -114,8 +125,11 @@ class JobProcessor {
       // Execute workflow
       const result = await this.executeWorkflow(job.workflow_definition);
 
-      // Update job with result
+      // Update job with result (this also sets status to SUCCESS)
       await model.updateOutput(jobId, result);
+
+      // Deduct credits after successful job completion
+      await this.deductCredits(job.user_id, job.workflow_definition, jobId);
 
       logger.info('Job completed successfully', { jobId });
     } catch (error: any) {
@@ -125,14 +139,94 @@ class JobProcessor {
       const job = await model.findById(jobId);
       if (job) {
         await model.updateError(jobId, error.message);
+        await model.updateStatus(jobId, JobStatus.FAILED);
         
         // Retry logic
         if (job.retry_count < 3) {
           await model.incrementRetryCount(jobId);
           // Re-queue for retry
           logger.info('Re-queuing job for retry', { jobId, retryCount: job.retry_count + 1 });
+        } else {
+          // Job failed permanently - refund credits if deducted
+          // Note: Credits are only deducted on success, so no refund needed here
+          logger.info('Job failed permanently', { jobId });
         }
       }
+    }
+  }
+
+  private async deductCredits(userId: string, workflowDefinition: any, jobId: string): Promise<void> {
+    try {
+      // Calculate total credit cost based on workflow steps
+      const toolModel = await getToolModel();
+      let totalCost = 0;
+
+      for (const step of workflowDefinition.steps || []) {
+        if (step.tool_id) {
+          const tool = await toolModel.findById(step.tool_id);
+          if (tool) {
+            totalCost += tool.credit_cost_per_call || 1;
+          } else {
+            // Default cost if tool not found
+            totalCost += 1;
+          }
+        } else {
+          // Default cost for steps without tools
+          totalCost += 1;
+        }
+      }
+
+      if (totalCost === 0) {
+        logger.warn('No credit cost calculated for job', { userId, jobId });
+        return;
+      }
+
+      // Get user to verify they have enough credits
+      const userModel = await getUserModel();
+      const user = await userModel.findById(userId);
+      if (!user) {
+        logger.error('User not found for credit deduction', { userId, jobId });
+        return;
+      }
+
+      if (user.current_credits < BigInt(totalCost)) {
+        logger.warn('Insufficient credits for job', {
+          userId,
+          jobId,
+          required: totalCost,
+          available: Number(user.current_credits),
+        });
+        // Don't deduct, but log warning
+        return;
+      }
+
+      // Call billing service to deduct credits
+      const billingServiceUrl = `http://localhost:${config.services.billing.port}`;
+      
+      // Create a temporary token or use service-to-service auth
+      // For now, we'll make a direct database call instead of HTTP call
+      // to avoid authentication issues
+      const newCredits = user.current_credits - BigInt(totalCost);
+      await userModel.updateCredits(userId, newCredits);
+
+      logger.info('Credits deducted successfully', {
+        userId,
+        jobId,
+        totalCost,
+        creditsBefore: Number(user.current_credits),
+        creditsAfter: Number(newCredits),
+      });
+
+      // Dispatch event for frontend to update credit display
+      // This would typically be done via WebSocket or polling
+    } catch (error: any) {
+      logger.error('Error deducting credits', {
+        userId,
+        jobId,
+        error: error.message,
+        stack: error.stack,
+      });
+      // Don't throw - log error but don't fail the job
     }
   }
 
@@ -140,37 +234,119 @@ class JobProcessor {
     const results: Record<string, any> = {};
     const stepResults: Map<string, any> = new Map();
 
+    logger.info('Executing workflow', { stepCount: workflow.steps?.length || 0 });
+
     // Execute steps in order (respecting dependencies)
-    for (const step of workflow.steps) {
+    for (const step of workflow.steps || []) {
+      logger.debug('Executing step', { 
+        stepId: step.id, 
+        action: step.action, 
+        toolId: step.tool_id,
+        dependsOn: step.depends_on 
+      });
+
       // Check dependencies
-      if (step.depends_on) {
+      if (step.depends_on && step.depends_on.length > 0) {
         for (const depId of step.depends_on) {
           if (!stepResults.has(depId)) {
-            throw new Error(`Dependency ${depId} not found`);
+            throw new Error(`Dependency ${depId} not found for step ${step.id}. Ensure all dependencies execute before this step.`);
           }
         }
+        
+        // Pass dependency results as inputs if needed
+        const dependencyResults = step.depends_on.map(depId => stepResults.get(depId));
+        logger.debug('Dependency results available', { 
+          stepId: step.id, 
+          dependencyCount: dependencyResults.length 
+        });
       }
 
       // Get tool
       const toolModel = await getToolModel();
       const tool = await toolModel.findById(step.tool_id);
-      if (!tool || tool.status !== 'Approved') {
-        throw new Error(`Tool ${step.tool_id} not found or not approved`);
+      if (!tool) {
+        throw new Error(`Tool ${step.tool_id} not found for step ${step.id}. Please ensure the tool is registered.`);
+      }
+      if (tool.status !== 'Approved') {
+        throw new Error(`Tool "${tool.name}" (${step.tool_id}) is not approved (status: ${tool.status}) for step ${step.id}`);
       }
 
-      // Create MCP client
-      const mcpClient = new MCPClient(tool.gateway_url);
-
-      // Execute tool call
-      const stepResult = await mcpClient.callTool({
-        tool_id: step.tool_id,
-        name: step.action,
-        arguments: step.parameters,
+      logger.debug('Tool found', { 
+        stepId: step.id, 
+        toolName: tool.name, 
+        toolId: tool.tool_id,
+        gatewayUrl: tool.gateway_url 
       });
 
-      stepResults.set(step.id, stepResult);
-      results[step.id] = stepResult;
+      // Create MCP client with protocol from tool
+      const mcpClient = new MCPClient(tool.gateway_url, tool.protocol || 'json-rpc');
+
+      // Prepare parameters - merge step parameters with dependency outputs if needed
+      const parameters = { ...step.parameters };
+      
+      // If step has dependencies, we can pass their outputs
+      // This allows chaining workflow steps
+      if (step.depends_on && step.depends_on.length > 0) {
+        const dependencyOutputs = step.depends_on.map(depId => stepResults.get(depId));
+        // Add dependency outputs to parameters if not already present
+        if (dependencyOutputs.length === 1) {
+          // Single dependency - pass as 'input' or merge into parameters
+          if (!parameters.input && !parameters.text && !parameters.content) {
+            const depOutput = dependencyOutputs[0];
+            if (typeof depOutput === 'string') {
+              parameters.input = depOutput;
+            } else if (depOutput?.text) {
+              parameters.text = depOutput.text;
+            } else if (depOutput?.content) {
+              parameters.content = depOutput.content;
+            } else if (depOutput?.result) {
+              parameters.input = depOutput.result;
+            }
+          }
+        } else if (dependencyOutputs.length > 1) {
+          // Multiple dependencies - pass as array
+          parameters.dependencies = dependencyOutputs;
+        }
+      }
+
+      // Execute tool call
+      try {
+        logger.debug('Calling tool', { 
+          stepId: step.id, 
+          toolName: tool.name, 
+          action: step.action,
+          parameterKeys: Object.keys(parameters)
+        });
+
+        const stepResult = await mcpClient.callTool({
+          tool_id: step.tool_id,
+          name: step.action,
+          arguments: parameters,
+        });
+
+        logger.debug('Step completed', { 
+          stepId: step.id, 
+          resultType: typeof stepResult,
+          hasResult: !!stepResult
+        });
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+      } catch (error: any) {
+        logger.error('Step execution failed', { 
+          stepId: step.id, 
+          toolName: tool.name,
+          action: step.action,
+          error: error.message 
+        });
+        throw new Error(`Step ${step.id} (${step.action}) failed: ${error.message}`);
+      }
     }
+
+    logger.info('Workflow execution completed', { 
+      totalSteps: workflow.steps?.length || 0,
+      completedSteps: Object.keys(results).length
+    });
 
     return results;
   }

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 import { ChatMessage, Message, UploadedFile } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { WorkflowResultCard, WorkflowResult } from "./WorkflowResultCard";
@@ -27,7 +28,11 @@ I can help you:
 • Build and manage automated pipelines
 • Connect to various AI services seamlessly
 
-Type a message or use /workflow to open the Visual Workflow Builder.`,
+**Get Started:**
+• Click "Workflows" in the navigation bar to open the Visual Workflow Builder
+• Or type \`/workflow\` here to navigate to the builder
+• Upload documents to analyze them with AI
+• Ask me anything about your data or workflows`,
     timestamp: new Date(),
   },
 ];
@@ -43,9 +48,9 @@ const sampleWorkflowResult: WorkflowResult = {
 };
 
 export function ChatContainer() {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>(welcomeMessages);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showWorkflow, setShowWorkflow] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<'openai' | 'gemini' | 'claude' | undefined>(undefined);
@@ -109,13 +114,42 @@ export function ChatContainer() {
               .map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`)
               .join(', ');
             
-            // If no user message, automatically request summary for PDFs
+            // If no user message, automatically request summary and next steps for documents
             const hasPDFs = uploadedFiles.some(f => f.filename.toLowerCase().endsWith('.pdf'));
+            const hasDocuments = uploadedFiles.some(f => {
+              const ext = f.filename.toLowerCase();
+              return ext.endsWith('.pdf') || ext.endsWith('.docx') || ext.endsWith('.doc') || 
+                     ext.endsWith('.txt') || ext.endsWith('.md');
+            });
             const hasExtractedText = uploadedFiles.some(f => f.extractedText && f.extractedText.length > 0);
             
-            if (!content.trim() && hasPDFs && hasExtractedText) {
-              // Auto-generate summary for PDFs
-              content = "Please provide a summary of the uploaded document(s), including key points, main topics, and any important details.";
+            if (!content.trim() && hasDocuments && hasExtractedText) {
+              // Auto-generate comprehensive prompt for document analysis
+              const fileNames = uploadedFiles.map(f => f.filename).join(', ');
+              content = `I've uploaded the following document(s): ${fileNames}
+
+Please:
+1. Provide a comprehensive summary of the document(s), including:
+   - Key points and main topics
+   - Important details and findings
+   - Any notable patterns or insights
+
+2. After the summary, suggest what I can do next with this document, such as:
+   - Analyzing specific sections
+   - Extracting particular information
+   - Creating workflows based on the content
+   - Answering questions about the document
+
+The document content has been extracted and is included below.`;
+            } else if (!content.trim() && hasDocuments && !hasExtractedText) {
+              // Document uploaded but text extraction failed
+              const fileNames = uploadedFiles.map(f => f.filename).join(', ');
+              content = `I've uploaded the following document(s): ${fileNames}, but text extraction was not successful.
+
+Please help me understand:
+1. Why the text extraction might have failed
+2. What I can do to work with this document
+3. Alternative approaches to analyze the document`;
             }
             
             // Add file info to message content if not already included
@@ -150,13 +184,38 @@ export function ChatContainer() {
               
               if (pdfFiles.length > 0) {
                 // Check if extraction failed due to error
-                const hasExtractionError = pdfFiles.some(f => f.metadata?.extractionFailed);
-                const errorMessage = hasExtractionError 
-                  ? "Text extraction failed due to a processing error. This may be a scanned PDF requiring OCR, an encrypted PDF, or an unsupported format."
-                  : "Text extraction was not successful. This PDF may be image-based (scanned) and require OCR processing.";
+                const failedFiles = pdfFiles.filter(f => f.metadata?.extractionFailed);
+                const errorDetails = failedFiles.map(f => {
+                  const error = f.metadata?.extractionError || 'Unknown error';
+                  const errorType = f.metadata?.errorType || 'Unknown';
+                  const details = f.metadata?.errorDetails || {};
+                  
+                  let specificMessage = '';
+                  if (details.isCorrupted) {
+                    specificMessage = 'The PDF file appears to be corrupted or invalid.';
+                  } else if (details.isTimeout) {
+                    specificMessage = 'PDF parsing timed out (file may be too complex).';
+                  } else if (details.isTooLarge) {
+                    specificMessage = 'PDF file is too large (max 50MB).';
+                  } else if (details.isDOMMatrixError) {
+                    specificMessage = 'PDF parsing library initialization error.';
+                  } else if (details.isImportError) {
+                    specificMessage = 'PDF parsing library not available.';
+                  } else if (error.includes('OCR') || error.includes('scanned')) {
+                    specificMessage = 'This appears to be a scanned PDF (image-based). OCR may be needed.';
+                  } else {
+                    specificMessage = `Extraction error: ${error.substring(0, 100)}`;
+                  }
+                  
+                  return `${f.filename}: ${specificMessage}`;
+                }).join('\n');
                 
                 const fileList = pdfFiles.map(f => `${f.filename} (${(f.size / 1024).toFixed(1)} KB)`).join(', ');
-                content = `${content}\n\n[PDF files uploaded but text extraction failed: ${fileList}]\n\n${errorMessage}\n\nYou can:\n- Try OCR processing if enabled (for scanned PDFs)\n- Ask me to analyze the file if OCR is available\n- Provide the text content manually if needed`;
+                const generalMessage = failedFiles.length > 0
+                  ? `\n\n[PDF files uploaded but text extraction failed: ${fileList}]\n\n${errorDetails}\n\nPossible solutions:\n- If this is a scanned PDF, OCR processing may help (if enabled)\n- Check if the PDF is encrypted or password-protected\n- Verify the PDF file is not corrupted\n- Try a different PDF file or provide the text content manually`
+                  : `\n\n[PDF files uploaded: ${fileList} - text extraction was not successful. This may be a scanned PDF requiring OCR processing.]`;
+                
+                content = `${content}${generalMessage}`;
               }
               
               if (otherFiles.length > 0) {
@@ -197,71 +256,67 @@ export function ChatContainer() {
         }
       }
 
-      // Check if it's a workflow command
-      const isWorkflowCommand = content.toLowerCase().includes("/workflow") || content.toLowerCase().includes("workflow");
+      // Check if it's a workflow command (but don't navigate if files were just uploaded)
+      // Only navigate to workflow if it's an explicit command without file uploads
+      const isWorkflowCommand = content.toLowerCase().includes("/workflow") || 
+                               (content.toLowerCase().includes("workflow") && !content.toLowerCase().includes("uploaded"));
       
-      if (isWorkflowCommand) {
-        // TODO: Implement workflow creation via backend
-        setShowWorkflow(true);
+      if (isWorkflowCommand && (!files || files.length === 0)) {
+        navigate('/workflow');
+        setIsProcessing(false);
+        return;
+      }
+      
+      // Connect to backend chat API
+      const response = await apiClient.sendChatMessage(content, undefined, provider || selectedProvider);
+      
+      if (response.success && response.data) {
+        // Check if it's a placeholder response
+        const messageText = response.data.message || response.data.response || "";
+        const isPlaceholder = messageText.includes("To enable AI responses") || 
+                              (messageText.includes("I received your message") && 
+                               !messageText.includes("However, there was an error"));
+        
+        if (isPlaceholder) {
+          console.warn("⚠️ Received placeholder response - API key may not be loaded", {
+            message: messageText.substring(0, 200),
+            fullResponse: response.data
+          });
+          
+          // Show a helpful message to guide users to set their API key
+          const assistantMessage: Message = {
+            id: `msg-${Date.now()}-assistant`,
+            role: "assistant",
+            content: `${messageText}\n\n💡 **Tip:** To use AI features, please configure your API key:\n1. Click the Settings icon (⚙️) in the top right\n2. Go to "API Keys" section\n3. Add your OpenAI API key\n4. Set it as default\n\nYou can get an API key from https://platform.openai.com/api-keys`,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+          setIsProcessing(false);
+          return;
+        }
+        
         const assistantMessage: Message = {
           id: `msg-${Date.now()}-assistant`,
           role: "assistant",
-          content: "I've prepared a workflow based on your request. Here's the execution result:",
+          content: messageText,
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, assistantMessage]);
-      } else {
-        // Connect to backend chat API
-        const response = await apiClient.sendChatMessage(content, undefined, provider || selectedProvider);
         
-        if (response.success && response.data) {
-          // Check if it's a placeholder response
-          const messageText = response.data.message || response.data.response || "";
-          const isPlaceholder = messageText.includes("To enable AI responses") || 
-                                (messageText.includes("I received your message") && 
-                                 !messageText.includes("However, there was an error"));
-          
-          if (isPlaceholder) {
-            console.warn("⚠️ Received placeholder response - API key may not be loaded", {
-              message: messageText.substring(0, 200),
-              fullResponse: response.data
-            });
-            
-            // Show a helpful message to guide users to set their API key
-            const assistantMessage: Message = {
-              id: `msg-${Date.now()}-assistant`,
-              role: "assistant",
-              content: `${messageText}\n\n💡 **Tip:** To use AI features, please configure your API key:\n1. Click the Settings icon (⚙️) in the top right\n2. Go to "API Keys" section\n3. Add your OpenAI API key\n4. Set it as default\n\nYou can get an API key from https://platform.openai.com/api-keys`,
-              timestamp: new Date(),
-            };
-            setMessages((prev) => [...prev, assistantMessage]);
-            setIsProcessing(false);
-            return;
-          }
-          
-          const assistantMessage: Message = {
-            id: `msg-${Date.now()}-assistant`,
-            role: "assistant",
-            content: messageText,
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
-          
-          // Speak the response if TTS is enabled
-          if (ttsEnabled && messageText) {
-            speak(messageText);
-          }
-        } else {
-          // Fallback response if API fails or returns error
-          const errorMsg = response.error?.message || "Unable to process your message. Please check your connection.";
-          const assistantMessage: Message = {
-            id: `msg-${Date.now()}-assistant`,
-            role: "assistant",
-            content: errorMsg,
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
+        // Speak the response if TTS is enabled
+        if (ttsEnabled && messageText) {
+          speak(messageText);
         }
+      } else {
+        // Fallback response if API fails or returns error
+        const errorMsg = response.error?.message || "Unable to process your message. Please check your connection.";
+        const assistantMessage: Message = {
+          id: `msg-${Date.now()}-assistant`,
+          role: "assistant",
+          content: errorMsg,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
       }
     } catch (error) {
       const errorMessage: Message = {
@@ -325,29 +380,6 @@ export function ChatContainer() {
               }}
             />
           ))}
-
-          {showWorkflow && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex gap-4"
-            >
-              <div className="flex-shrink-0 flex items-center justify-center">
-                <img 
-                  src={logo} 
-                  alt="UAOL Logo" 
-                  className="w-10 h-10 object-contain"
-                  onError={handleLogoError}
-                />
-              </div>
-              <div className="flex-1 max-w-[75%]">
-                <WorkflowResultCard
-                  result={sampleWorkflowResult}
-                  onViewDetails={() => console.log("Open VWB")}
-                />
-              </div>
-            </motion.div>
-          )}
 
           {isProcessing && (
             <motion.div

@@ -42,7 +42,7 @@ export class OpenAIProvider implements AIProvider {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } })) as { error?: { message?: string; code?: string | number; type?: string } };
       const errorMessage = error.error?.message || `OpenAI API error: ${response.statusText}`;
       const errorCode = error.error?.code || response.status;
       
@@ -74,7 +74,7 @@ Get a new key at: https://platform.openai.com/api-keys`);
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
-    return data.choices[0]?.message?.content || '';
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    return data.choices?.[0]?.message?.content || '';
   }
 }
