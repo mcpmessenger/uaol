@@ -9,3 +9,5 @@ CREATE INDEX IF NOT EXISTS idx_users_avatar_url ON users(avatar_url) WHERE avata
 
 COMMENT ON COLUMN users.avatar_url IS 'URL to user avatar/picture from OAuth provider (Google, Outlook, etc.)';
 
+
+

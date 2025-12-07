@@ -26,6 +26,19 @@ export default function AuthCallback() {
         if (token) {
           try {
             apiClient.setToken(token);
+            // Fetch user data immediately to get updated avatar
+            try {
+              const userResponse = await apiClient.getCurrentUser();
+              if (userResponse.success && userResponse.data) {
+                // User data fetched successfully, avatar should be included
+                console.log('User data fetched:', { 
+                  hasAvatar: !!userResponse.data.avatarUrl,
+                  avatarUrl: userResponse.data.avatarUrl?.substring(0, 50) 
+                });
+              }
+            } catch (userError) {
+              console.warn('Failed to fetch user data after login:', userError);
+            }
             // Dispatch event to notify Header component to refresh user data
             window.dispatchEvent(new Event('user-logged-in'));
             setStatus("success");

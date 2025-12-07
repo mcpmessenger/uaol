@@ -17,3 +17,5 @@ AND column_name = 'protocol';
 -- Note: We're skipping the constraint for now - it's not critical
 -- The column will default to 'json-rpc' and you can update it to 'rest' when inserting
 
+
+

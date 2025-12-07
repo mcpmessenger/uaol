@@ -1,0 +1,21 @@
+version: '3.8'
+
+# Optional: Add this to your main docker-compose.yml or run separately
+# This runs the Playwright MCP server as a Docker container
+
+services:
+  playwright-mcp:
+    image: mcr.microsoft.com/playwright/mcp:latest
+    container_name: uaol-playwright-mcp
+    ports:
+      - "8931:8931"
+    command: --headless --browser chromium --no-sandbox --port 8931
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8931/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Optional: Add environment variables if needed
+    # environment:
+    #   - NODE_ENV=production

@@ -261,6 +261,189 @@ class JobProcessor {
         });
       }
 
+      // Handle built-in node types that don't require tool registration
+      const inputs = (workflow as any).inputs || {};
+      
+      if (step.action === 'upload' || step.node_type === 'file-upload') {
+        // File upload is a data input node - files are already uploaded
+        // Just pass through the uploaded files from inputs
+        const uploadedFiles = inputs.uploadedFiles?.[step.id] || step.parameters.uploadedFiles || [];
+        
+        logger.debug('Processing file-upload node', { 
+          stepId: step.id,
+          fileCount: uploadedFiles.length
+        });
+
+        const stepResult = {
+          files: uploadedFiles,
+          fileIds: uploadedFiles.map((f: any) => f.fileId),
+          count: uploadedFiles.length,
+        };
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+        continue; // Skip tool execution for file-upload
+      }
+
+      if (step.action === 'extract' || step.node_type === 'text-extraction') {
+        // Text extraction - get text from uploaded files
+        logger.debug('Processing text-extraction node', { stepId: step.id });
+        
+        // Get files from previous step (file-upload)
+        let files: any[] = [];
+        if (step.depends_on && step.depends_on.length > 0) {
+          const depResult = stepResults.get(step.depends_on[0]);
+          if (depResult?.files) {
+            files = depResult.files;
+          }
+        } else {
+          // Fallback: get from inputs
+          const uploadedFiles = inputs.uploadedFiles || {};
+          files = Object.values(uploadedFiles).flat() as any[];
+        }
+
+        // Extract text from files (files already have extractedText from upload)
+        const extractedTexts = files
+          .filter(f => f.extractedText)
+          .map(f => ({
+            fileId: f.fileId,
+            filename: f.filename,
+            text: f.extractedText,
+            length: f.extractedText.length,
+          }));
+
+        const combinedText = extractedTexts.map(t => t.text).join('\n\n');
+        
+        const stepResult = {
+          text: combinedText,
+          files: extractedTexts,
+          totalLength: combinedText.length,
+          fileCount: extractedTexts.length,
+        };
+
+        logger.debug('Text extraction completed', { 
+          stepId: step.id,
+          textLength: combinedText.length,
+          fileCount: extractedTexts.length
+        });
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+        continue;
+      }
+
+      if (step.action === 'index' || step.node_type === 'rag-indexing') {
+        // RAG indexing - placeholder implementation
+        logger.debug('Processing rag-indexing node', { stepId: step.id });
+        
+        // Get text from previous step (text-extraction)
+        let text = '';
+        if (step.depends_on && step.depends_on.length > 0) {
+          const depResult = stepResults.get(step.depends_on[0]);
+          text = depResult?.text || '';
+        }
+
+        const chunkSize = step.parameters?.chunkSize || 1000;
+        const chunkOverlap = step.parameters?.chunkOverlap || 200;
+        
+        // Simple chunking (placeholder - real implementation would use vector store)
+        const chunks: string[] = [];
+        for (let i = 0; i < text.length; i += chunkSize - chunkOverlap) {
+          chunks.push(text.slice(i, i + chunkSize));
+        }
+
+        const stepResult = {
+          indexed: true,
+          chunkCount: chunks.length,
+          totalLength: text.length,
+          chunks: chunks.slice(0, 10), // Return first 10 chunks as sample
+        };
+
+        logger.debug('RAG indexing completed', { 
+          stepId: step.id,
+          chunkCount: chunks.length
+        });
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+        continue;
+      }
+
+      if (step.action === 'query' || step.node_type === 'rag-query') {
+        // RAG query - placeholder implementation
+        logger.debug('Processing rag-query node', { stepId: step.id });
+        
+        const query = step.parameters?.query || '';
+        const topK = step.parameters?.topK || 5;
+
+        // Get indexed chunks from previous step
+        let chunks: string[] = [];
+        if (step.depends_on && step.depends_on.length > 0) {
+          const depResult = stepResults.get(step.depends_on[0]);
+          chunks = depResult?.chunks || [];
+        }
+
+        // Simple text matching (placeholder - real implementation would use semantic search)
+        const results = chunks
+          .map((chunk, idx) => ({
+            chunk,
+            index: idx,
+            score: chunk.toLowerCase().includes(query.toLowerCase()) ? 0.8 : 0.1,
+          }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, topK);
+
+        const stepResult = {
+          query,
+          results: results.map(r => r.chunk),
+          count: results.length,
+        };
+
+        logger.debug('RAG query completed', { 
+          stepId: step.id,
+          resultCount: results.length
+        });
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+        continue;
+      }
+
+      if (step.action === 'generate' || step.node_type === 'ai-generation') {
+        // AI generation - placeholder implementation
+        logger.debug('Processing ai-generation node', { stepId: step.id });
+        
+        const prompt = step.parameters?.prompt || '';
+        const model = step.parameters?.model || 'gpt-4o';
+
+        // Get context from previous steps
+        let context = '';
+        if (step.depends_on && step.depends_on.length > 0) {
+          const depResults = step.depends_on.map(depId => stepResults.get(depId));
+          context = depResults
+            .map(r => r?.text || r?.results?.join('\n') || '')
+            .filter(Boolean)
+            .join('\n\n');
+        }
+
+        // Placeholder result - real implementation would call AI API
+        const stepResult = {
+          generated: `[AI Generation Placeholder]\nPrompt: ${prompt}\nModel: ${model}\nContext length: ${context.length} characters`,
+          model,
+          prompt,
+          contextLength: context.length,
+        };
+
+        logger.debug('AI generation completed', { 
+          stepId: step.id,
+          model
+        });
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+        continue;
+      }
+
       // Get tool
       const toolModel = await getToolModel();
       const tool = await toolModel.findById(step.tool_id);
@@ -301,6 +484,10 @@ class JobProcessor {
               parameters.content = depOutput.content;
             } else if (depOutput?.result) {
               parameters.input = depOutput.result;
+            } else if (depOutput?.files) {
+              // Pass files from file-upload node to next step
+              parameters.files = depOutput.files;
+              parameters.fileIds = depOutput.fileIds;
             }
           }
         } else if (dependencyOutputs.length > 1) {

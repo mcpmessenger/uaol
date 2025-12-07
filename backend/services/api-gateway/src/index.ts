@@ -637,39 +637,28 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
       mimetype: req.file.mimetype 
     });
 
-    // Convert audio to format Whisper accepts (if needed)
+    // Use OpenAI SDK for more reliable transcription
+    const { OpenAI, toFile } = await import('openai');
+    const openai = new OpenAI({ apiKey: openaiApiKey });
+
+    // Convert buffer to File-like object using OpenAI's toFile utility
     // Whisper accepts: mp3, mp4, mpeg, mpga, m4a, wav, webm
-    const audioFile = req.file;
+    const filename = req.file.originalname || 'recording.webm';
+    const audioFile = await toFile(req.file.buffer, filename);
 
-    // Create FormData for OpenAI Whisper API
-    // Use form-data package for Node.js
-    const FormData = (await import('form-data')).default;
-    const formData = new FormData();
-    formData.append('file', audioFile.buffer, {
-      filename: audioFile.originalname || 'recording.webm',
-      contentType: audioFile.mimetype || 'audio/webm',
-    });
-    formData.append('model', 'whisper-1');
-    formData.append('language', 'en'); // Optional: auto-detect if not specified
-
-    // Call OpenAI Whisper API
-    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openaiApiKey}`,
-        ...formData.getHeaders(),
-      },
-      body: formData as any,
+    // Call OpenAI Whisper API using the SDK
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: 'whisper-1',
+      language: 'en', // Optional: auto-detect if not specified
     });
 
-    if (!whisperResponse.ok) {
-      const errorData = await whisperResponse.json();
-      logger.error('Whisper API error', errorData);
-      throw new Error(errorData.error?.message || 'Whisper API error');
+    const transcribedText = transcription.text || '';
+
+    if (!transcribedText) {
+      logger.warn('Transcription returned empty text', { transcription });
+      throw new Error('Transcription returned empty result');
     }
-
-    const transcriptionData = await whisperResponse.json();
-    const transcribedText = transcriptionData.text || '';
 
     logger.info('Transcription successful', { textLength: transcribedText.length });
 
@@ -681,12 +670,29 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
       },
     });
   } catch (error: any) {
-    logger.error('Transcription endpoint error', error);
+    logger.error('Transcription endpoint error', { 
+      error: error.message,
+      stack: error.stack,
+      name: error.name,
+      // Log OpenAI-specific error details if available
+      openaiError: error.response?.data || error.error 
+    });
+    
+    // Provide more specific error messages
+    let errorMessage = error.message || 'Failed to transcribe audio';
+    if (error.status === 401) {
+      errorMessage = 'Invalid OpenAI API key';
+    } else if (error.status === 429) {
+      errorMessage = 'OpenAI API rate limit exceeded. Please try again later.';
+    } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      errorMessage = 'Unable to connect to OpenAI API. Please check your internet connection.';
+    }
+    
     res.status(500).json({
       success: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: error.message || 'Failed to transcribe audio',
+        message: errorMessage,
       },
     });
   }

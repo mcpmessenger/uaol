@@ -17,6 +17,9 @@ authRoutes.get('/icloud/callback', authController.handleIcloudCallback); // Fall
 authRoutes.post('/api-key/regenerate', authenticate, authController.regenerateApiKey);
 authRoutes.get('/api-key', authenticate, authController.getApiKey);
 
+// OAuth photo proxy (requires authentication)
+authRoutes.get('/outlook/photo/:userId', authenticate, authController.getOutlookPhoto);
+
 // Session routes
 authRoutes.post('/register', authController.register);
 authRoutes.post('/login', authController.login);

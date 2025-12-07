@@ -30,3 +30,5 @@ AND column_name = 'protocol';
 
 -- Expected: Should show protocol column with VARCHAR(20) type
 
+
+

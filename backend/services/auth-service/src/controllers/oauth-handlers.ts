@@ -81,34 +81,68 @@ async function storeOAuthTokens(
 async function exchangeGoogleCode(code: string): Promise<OAuthTokenResponse> {
   const tokenUrl = 'https://oauth2.googleapis.com/token';
   
-  const response = await fetch(tokenUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      code,
-      client_id: process.env.GOOGLE_CLIENT_ID || config.oauth.google.clientId || '',
-      client_secret: process.env.GOOGLE_CLIENT_SECRET || config.oauth.google.clientSecret || '',
-      redirect_uri: process.env.GOOGLE_REDIRECT_URI || config.oauth.google.redirectUri || 'http://localhost:3000/auth/google/callback',
-      grant_type: 'authorization_code',
-    }),
-  });
+  const clientId = process.env.GOOGLE_CLIENT_ID || config.oauth.google.clientId || '';
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || config.oauth.google.clientSecret || '';
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || config.oauth.google.redirectUri || 'http://localhost:3000/auth/google/callback';
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    logger.error('Google token exchange failed', {
-      status: response.status,
-      statusText: response.statusText,
-      error: errorText,
-      redirectUri: process.env.GOOGLE_REDIRECT_URI || config.oauth.google.redirectUri,
-      hasClientId: !!process.env.GOOGLE_CLIENT_ID,
-      hasClientSecret: !!process.env.GOOGLE_CLIENT_SECRET,
+  if (!clientId || !clientSecret) {
+    logger.error('Google OAuth credentials missing', {
+      hasClientId: !!clientId,
+      hasClientSecret: !!clientSecret,
     });
-    throw new AuthenticationError(`Google token exchange failed (${response.status}): ${errorText}`);
+    throw new AuthenticationError('Google OAuth credentials not configured');
   }
 
-  return await response.json();
+  try {
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error('Google token exchange failed', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText,
+        redirectUri,
+        hasClientId: !!clientId,
+        hasClientSecret: !!clientSecret,
+      });
+      throw new AuthenticationError(`Google token exchange failed (${response.status}): ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    // Handle network errors
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      logger.error('Network error during Google token exchange', {
+        error: error.message,
+        stack: error.stack,
+        url: tokenUrl,
+      });
+      throw new AuthenticationError(`Network error: Unable to connect to Google OAuth service. ${error.message}`);
+    }
+    // Re-throw AuthenticationError as-is
+    if (error instanceof AuthenticationError) {
+      throw error;
+    }
+    // Wrap other errors
+    logger.error('Unexpected error during Google token exchange', {
+      error: error.message,
+      stack: error.stack,
+    });
+    throw new AuthenticationError(`Failed to exchange Google OAuth code: ${error.message}`);
+  }
 }
 
 /**
@@ -202,20 +236,26 @@ async function getOutlookUserInfo(accessToken: string): Promise<OutlookUserInfo>
 
   const userInfo = await response.json();
   
-  // Check if user has a photo (we'll use a proxy endpoint to serve it)
-  // The photo endpoint requires authentication, so we'll store a reference
-  // and proxy it through our backend
+  // Try to get the photo URL from Microsoft Graph
+  // Microsoft Graph provides photo metadata that includes a URL
   try {
-    const photoResponse = await fetch('https://graph.microsoft.com/v1.0/me/photo', {
+    const photoMetaResponse = await fetch('https://graph.microsoft.com/v1.0/me/photo', {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
     });
     
-    if (photoResponse.ok) {
-      // User has a photo - we'll use a proxy endpoint
+    if (photoMetaResponse.ok) {
+      const photoMeta = await photoMetaResponse.json();
+      // Microsoft Graph photo metadata includes dimensions but not a direct URL
+      // We'll use a proxy endpoint format: /auth/outlook/photo/:userId
       // Store a marker that this user has a photo from Outlook
       userInfo.photo = 'outlook'; // Marker to indicate photo exists
+      logger.info('Outlook user has photo available', { 
+        userId: userInfo.id,
+        photoWidth: photoMeta.width,
+        photoHeight: photoMeta.height 
+      });
     }
   } catch (error) {
     logger.warn('Failed to check Outlook photo', { error });
@@ -336,14 +376,28 @@ export async function handleOAuthCallback(
     // Exchange code for tokens
     let tokenResponse: OAuthTokenResponse;
     try {
+      logger.info('Attempting token exchange', { 
+        provider,
+        codeLength: code?.length || 0,
+        codePrefix: code?.substring(0, 10) || 'none',
+      });
       tokenResponse = await exchangeCode(code);
       logger.info('Token exchange successful', { provider, hasAccessToken: !!tokenResponse.access_token });
     } catch (error: any) {
       logger.error('Token exchange failed', {
         provider,
         error: error.message,
+        errorName: error.name,
+        errorCode: error.code,
         stack: error.stack,
+        isNetworkError: error.message?.includes('fetch') || error.message?.includes('network') || error.message?.includes('ECONNREFUSED'),
       });
+      
+      // Provide more helpful error message for network errors
+      if (error.message?.includes('fetch') || error.message?.includes('network') || error.message?.includes('ECONNREFUSED')) {
+        throw new AuthenticationError(`Network error: Unable to connect to ${provider} OAuth service. Please check your internet connection and try again.`);
+      }
+      
       throw error;
     }
     
@@ -371,19 +425,31 @@ export async function handleOAuthCallback(
     if (provider === 'google' && userInfo.picture) {
       // Google provides a public picture URL that we can use directly
       avatarUrl = userInfo.picture;
-      logger.info('Google OAuth user info', { 
+      logger.info('Google OAuth user info - Avatar found', { 
         hasPicture: !!userInfo.picture, 
         pictureUrl: userInfo.picture?.substring(0, 50) + '...',
-        email: userInfo.email 
+        fullPictureUrl: userInfo.picture, // Log full URL for debugging
+        email: userInfo.email,
+        userInfoKeys: Object.keys(userInfo)
       });
     } else if (provider === 'google') {
       logger.warn('Google OAuth user info missing picture', { 
         userInfoKeys: Object.keys(userInfo),
-        email: userInfo.email 
+        email: userInfo.email,
+        userInfo: userInfo // Log full userInfo to see what Google returned
       });
+    } else if (provider === 'outlook' && userInfo.photo) {
+      // Outlook photos require authentication, so we'll use a proxy endpoint
+      // Format: /auth/outlook/photo/:userId - this will use the stored access token
+      avatarUrl = `/auth/outlook/photo/${user.user_id}`;
+      logger.info('Outlook OAuth user has photo', { 
+        userId: user.user_id,
+        proxyUrl: avatarUrl
+      });
+    } else if (provider === 'icloud') {
+      // Apple Sign in with Apple doesn't provide profile pictures
+      logger.info('iCloud/Apple OAuth - no profile picture available');
     }
-    // Note: Outlook photos require authentication and would need a proxy endpoint
-    // Note: iCloud/Apple doesn't provide profile pictures via Sign in with Apple
 
     // Update user avatar if we have one (don't fail login if this fails)
     if (avatarUrl) {

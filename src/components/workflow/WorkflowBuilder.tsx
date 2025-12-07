@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { NodeConfigPanel } from './NodeConfigPanel';
 import { WorkflowToolbar } from './WorkflowToolbar';
-import { Save, Play, X, ArrowLeft, Trash2 } from 'lucide-react';
+import { Save, Play, Trash2, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface WorkflowNode {
@@ -56,34 +56,66 @@ export function WorkflowBuilder({
   onNameChange,
   onWorkflowChange,
 }: WorkflowBuilderProps) {
-  const [nodes, setNodes] = useState<WorkflowNode[]>(
-    initialWorkflow?.nodes || getDefaultDocumentAnalysisWorkflow().nodes
-  );
-  const [edges, setEdges] = useState<WorkflowEdge[]>(
-    initialWorkflow?.edges || getDefaultDocumentAnalysisWorkflow().edges
-  );
+  // Initialize nodes and edges
+  const [nodes, setNodes] = useState<WorkflowNode[]>(() => {
+    return initialWorkflow?.nodes || getDefaultDocumentAnalysisWorkflow().nodes;
+  });
+  const [edges, setEdges] = useState<WorkflowEdge[]>(() => {
+    return initialWorkflow?.edges || getDefaultDocumentAnalysisWorkflow().edges;
+  });
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState(propWorkflowName || initialWorkflow?.name || 'Document Analysis & RAG');
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionStatus, setExecutionStatus] = useState<Record<string, 'pending' | 'running' | 'success' | 'error'>>({});
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [isOverTrash, setIsOverTrash] = useState(false);
+  
+  // Undo/Redo history
+  type WorkflowState = { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
+  const [history, setHistory] = useState<WorkflowState[]>(() => {
+    const initialNodes = initialWorkflow?.nodes || getDefaultDocumentAnalysisWorkflow().nodes;
+    const initialEdges = initialWorkflow?.edges || getDefaultDocumentAnalysisWorkflow().edges;
+    return [{ 
+      nodes: [...initialNodes], 
+      edges: [...initialEdges] 
+    }];
+  });
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const isUndoRedoRef = useRef(false);
+  const historyIndexRef = useRef(0);
 
   // Sync with prop changes (when switching tabs)
-  // Use a ref to track the last workflow to prevent unnecessary resets
+  // Use a ref to track the last workflow and tab to prevent unnecessary resets
   const lastWorkflowRef = useRef<WorkflowDefinition | undefined>();
+  const lastTabIdRef = useRef<string | undefined>(tabId);
   const isInitialMount = useRef(true);
+  const skipNextSync = useRef(false);
   
   useEffect(() => {
+    // Skip sync if this was triggered by our own update
+    if (skipNextSync.current) {
+      skipNextSync.current = false;
+      return;
+    }
+
+    // Check if tab changed (switching tabs)
+    const tabChanged = tabId !== lastTabIdRef.current;
+    if (tabChanged) {
+      lastTabIdRef.current = tabId;
+      isInitialMount.current = true; // Treat tab switch as initial mount
+    }
+
     if (initialWorkflow) {
-      // Only update if this is actually a different workflow
-      const workflowKey = initialWorkflow.name + (initialWorkflow.nodes?.map(n => n.id).sort().join(',') || '');
+      // Only update if this is actually a different workflow (different name or tab change)
+      // Don't use node IDs in comparison as they change when nodes are added/removed
+      const workflowKey = `${tabId || 'no-tab'}-${initialWorkflow.name}`;
       const lastKey = lastWorkflowRef.current 
-        ? lastWorkflowRef.current.name + (lastWorkflowRef.current.nodes?.map(n => n.id).sort().join(',') || '')
+        ? `${lastTabIdRef.current || 'no-tab'}-${lastWorkflowRef.current.name}`
         : '';
       
-      // On initial mount, always set the workflow
-      if (isInitialMount.current || workflowKey !== lastKey) {
+      // On initial mount or tab change, always set the workflow
+      // Also update if workflow name changed (different workflow)
+      if (isInitialMount.current || tabChanged || workflowKey !== lastKey) {
         isInitialMount.current = false;
         lastWorkflowRef.current = initialWorkflow;
         
@@ -92,10 +124,18 @@ export function WorkflowBuilder({
         if (newNodes.length > 0 || nodes.length === 0) {
           console.log('[WorkflowBuilder] Updating nodes from initialWorkflow', { 
             nodeCount: newNodes.length,
-            workflowName: initialWorkflow.name 
+            workflowName: initialWorkflow.name,
+            tabId,
+            tabChanged
           });
+          const newEdges = initialWorkflow.edges || [];
           setNodes(newNodes);
-          setEdges(initialWorkflow.edges || []);
+          setEdges(newEdges);
+          // Reset history when loading a new workflow
+          const initialState = { nodes: newNodes, edges: newEdges };
+          setHistory([initialState]);
+          setHistoryIndex(0);
+          historyIndexRef.current = 0;
         } else {
           console.warn('[WorkflowBuilder] Skipping node update - would clear existing nodes', {
             currentNodes: nodes.length,
@@ -108,7 +148,7 @@ export function WorkflowBuilder({
       console.warn('[WorkflowBuilder] initialWorkflow became undefined, keeping current nodes');
       lastWorkflowRef.current = undefined;
     }
-  }, [initialWorkflow]);
+  }, [initialWorkflow, tabId]);
 
   useEffect(() => {
     if (propWorkflowName) {
@@ -116,9 +156,42 @@ export function WorkflowBuilder({
     }
   }, [propWorkflowName]);
 
+  // Sync historyIndexRef with state
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
+
+  // Save state to history when nodes or edges change (but not during undo/redo)
+  useEffect(() => {
+    if (isInitialMount.current || isUndoRedoRef.current) {
+      isUndoRedoRef.current = false;
+      return;
+    }
+
+    // Save current state to history
+    const currentState = { nodes: [...nodes], edges: [...edges] };
+    
+    setHistory(prev => {
+      const currentIndex = historyIndexRef.current;
+      // Remove any future history if we're not at the end
+      const newHistory = prev.slice(0, currentIndex + 1);
+      // Add new state
+      newHistory.push(currentState);
+      // Limit history to 50 states
+      const limitedHistory = newHistory.length > 50 ? newHistory.slice(-50) : newHistory;
+      // Update index ref and state
+      const newIndex = limitedHistory.length - 1;
+      historyIndexRef.current = newIndex;
+      setHistoryIndex(newIndex);
+      return limitedHistory;
+    });
+  }, [nodes, edges]);
+
   // Notify parent of workflow changes
   useEffect(() => {
-    if (onWorkflowChange) {
+    if (onWorkflowChange && !isInitialMount.current && !isUndoRedoRef.current) {
+      // Mark to skip next sync to prevent loop
+      skipNextSync.current = true;
       const workflow: WorkflowDefinition = {
         name: workflowName,
         nodes,
@@ -191,6 +264,19 @@ export function WorkflowBuilder({
     }
   }, [selectedNode]);
 
+  const handleUndo = useCallback(() => {
+    if (historyIndexRef.current > 0) {
+      isUndoRedoRef.current = true;
+      const newIndex = historyIndexRef.current - 1;
+      const previousState = history[newIndex];
+      setNodes(previousState.nodes);
+      setEdges(previousState.edges);
+      historyIndexRef.current = newIndex;
+      setHistoryIndex(newIndex);
+      setSelectedNode(null); // Clear selection when undoing
+    }
+  }, [history]);
+
   const handleSave = useCallback(async () => {
     if (onSave && tabId) {
       // Use the parent's save handler (for tab management)
@@ -258,6 +344,15 @@ export function WorkflowBuilder({
     const orphanedNodes = executableNodes.filter(n => !connectedNodeIds.has(n.id));
     if (orphanedNodes.length > 0) {
       errors.push(`Found ${orphanedNodes.length} disconnected node(s). All nodes must be connected.`);
+    }
+
+    // Check that file-upload nodes have files uploaded
+    const fileUploadNodes = nodes.filter(n => n.type === 'file-upload');
+    for (const node of fileUploadNodes) {
+      const uploadedFiles = node.data.uploadedFiles;
+      if (!uploadedFiles || uploadedFiles.length === 0) {
+        errors.push(`File upload node "${node.data.label || node.id}" has no files uploaded. Please upload at least one file.`);
+      }
     }
 
     // Check for circular dependencies (basic check)
@@ -337,8 +432,26 @@ export function WorkflowBuilder({
         throw new Error('No workflow ID returned');
       }
 
-      // Execute the workflow
-      const executeResponse = await apiClient.executeWorkflow(workflowId);
+      // Collect uploaded files from file-upload nodes
+      const uploadedFiles: Record<string, any[]> = {};
+      nodes.forEach(node => {
+        if (node.type === 'file-upload' && node.data.uploadedFiles && node.data.uploadedFiles.length > 0) {
+          // Store files by node ID for the backend to use
+          uploadedFiles[node.id] = node.data.uploadedFiles.map((f: any) => ({
+            fileId: f.fileId,
+            filename: f.filename,
+            url: f.url,
+            size: f.size,
+            extractedText: f.extractedText,
+            metadata: f.metadata,
+          }));
+        }
+      });
+
+      // Execute the workflow with uploaded files as inputs
+      const executeResponse = await apiClient.executeWorkflow(workflowId, {
+        uploadedFiles,
+      });
       
       if (!executeResponse.success) {
         throw new Error(executeResponse.error?.message || 'Failed to execute workflow');
@@ -486,15 +599,6 @@ export function WorkflowBuilder({
       >
         {/* Top Left Controls */}
         <div className="absolute top-4 left-4 z-[100] flex items-center gap-2 pointer-events-auto">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onClose || (() => {})}
-            className="h-9 w-9 rounded-full bg-card/90 backdrop-blur-sm border border-border/50 hover:bg-card hover:border-primary/50 shadow-lg transition-all"
-            title="Go back"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
           <div className="pointer-events-auto">
             <WorkflowToolbar
               onAddNode={handleAddNode}
@@ -503,42 +607,59 @@ export function WorkflowBuilder({
           </div>
         </div>
 
-        {/* Trash Can - Drag and Drop Zone */}
-        <div
-          className="absolute bottom-4 right-4 z-[100] pointer-events-auto"
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (draggedNodeId) {
-              setIsOverTrash(true);
-            }
-          }}
-          onDragLeave={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsOverTrash(false);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsOverTrash(false);
-            if (draggedNodeId) {
-              handleDeleteNode(draggedNodeId);
-              setDraggedNodeId(null);
-            }
-          }}
-        >
-          <div 
+        {/* Bottom Right Controls - Undo and Trash Can */}
+        <div className="absolute bottom-4 right-4 z-[100] flex items-center gap-3 pointer-events-auto">
+          {/* Undo Button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleUndo}
+            disabled={historyIndex === 0}
             className={cn(
-              "flex items-center justify-center transition-all group cursor-pointer",
-              isOverTrash && draggedNodeId ? "scale-110" : ""
+              "h-10 w-10 rounded-full bg-card/90 backdrop-blur-sm border border-border/50 hover:bg-card hover:border-primary/50 shadow-lg transition-all",
+              historyIndex === 0 && "opacity-50 cursor-not-allowed"
             )}
-            title="Drag nodes here to delete"
+            title={historyIndex === 0 ? "Nothing to undo" : "Undo last action"}
           >
-            <Trash2 className={cn(
-              "w-6 h-6 text-muted-foreground transition-transform",
-              isOverTrash && draggedNodeId ? "scale-125 text-foreground" : "group-hover:scale-110 hover:text-foreground"
-            )} />
+            <RotateCcw className="w-4 h-4" />
+          </Button>
+          
+          {/* Trash Can - Drag and Drop Zone */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (draggedNodeId) {
+                setIsOverTrash(true);
+              }
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsOverTrash(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsOverTrash(false);
+              if (draggedNodeId) {
+                handleDeleteNode(draggedNodeId);
+                setDraggedNodeId(null);
+              }
+            }}
+          >
+            <div 
+              className={cn(
+                "flex items-center justify-center transition-all group cursor-pointer",
+                isOverTrash && draggedNodeId ? "scale-110" : ""
+              )}
+              title="Drag nodes here to delete"
+            >
+              <Trash2 className={cn(
+                "w-6 h-6 text-muted-foreground transition-transform",
+                isOverTrash && draggedNodeId ? "scale-125 text-foreground" : "group-hover:scale-110 hover:text-foreground"
+              )} />
+            </div>
           </div>
         </div>
 

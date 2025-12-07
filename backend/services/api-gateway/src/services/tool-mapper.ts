@@ -125,12 +125,19 @@ export async function getAvailableToolsForNodeType(nodeType: string): Promise<Ar
 
 /**
  * Validates that all tool IDs in a workflow exist and are approved
+ * Built-in node types don't require tool validation
  */
 export async function validateWorkflowTools(workflowDefinition: any): Promise<{ valid: boolean; errors: string[] }> {
   const errors: string[] = [];
   const toolModel = new MCPToolModel(getDatabasePool());
+  const BUILT_IN_NODE_TYPES = ['file-upload', 'text-extraction', 'rag-indexing', 'rag-query', 'ai-generation'];
 
   for (const step of workflowDefinition.steps || []) {
+    // Skip validation for built-in node types
+    if (step.node_type && BUILT_IN_NODE_TYPES.includes(step.node_type)) {
+      continue;
+    }
+    
     if (!step.tool_id) {
       errors.push(`Step ${step.id} is missing tool_id`);
       continue;

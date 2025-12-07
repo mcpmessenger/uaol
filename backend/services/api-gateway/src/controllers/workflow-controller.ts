@@ -49,8 +49,21 @@ export const workflowController = {
       }
 
       // Resolve tool IDs for steps that have node_type instead of tool_id
+      // Built-in node types don't require tool registration
+      const BUILT_IN_NODE_TYPES = ['file-upload', 'text-extraction', 'rag-indexing', 'rag-query', 'ai-generation'];
+      
       for (const step of workflowDefinition.steps) {
         if (step.node_type && !step.tool_id) {
+          // Skip tool resolution for built-in node types
+          if (BUILT_IN_NODE_TYPES.includes(step.node_type)) {
+            logger.debug('Skipping tool resolution for built-in node type', { 
+              stepId: step.id, 
+              nodeType: step.node_type
+            });
+            // Keep node_type for built-in handlers
+            continue;
+          }
+          
           const toolId = await mapNodeTypeToToolId(step.node_type);
           if (toolId) {
             step.tool_id = toolId;
@@ -59,6 +72,8 @@ export const workflowController = {
               nodeType: step.node_type, 
               toolId 
             });
+            // Remove node_type after resolving
+            delete step.node_type;
           } else {
             // Get available tools for better error message
             const { getAvailableToolsForNodeType } = await import('../services/tool-mapper');
@@ -76,8 +91,6 @@ export const workflowController = {
               },
             });
           }
-          // Remove node_type after resolving
-          delete step.node_type;
         }
       }
 
@@ -225,9 +238,27 @@ export const workflowController = {
       }
 
       // Resolve any remaining tool IDs (in case workflow was saved before tool resolution)
+      // Built-in node types don't require tool registration
+      const BUILT_IN_NODE_TYPES = ['file-upload', 'text-extraction', 'rag-indexing', 'rag-query', 'ai-generation'];
+      
       const workflowDef = { ...workflow.workflowDefinition };
+      // Include inputs in workflow definition for execution
+      if (inputs) {
+        (workflowDef as any).inputs = inputs;
+      }
+      
       for (const step of workflowDef.steps) {
         if (step.node_type && !step.tool_id) {
+          // Skip tool resolution for built-in node types
+          if (BUILT_IN_NODE_TYPES.includes(step.node_type)) {
+            logger.debug('Skipping tool resolution for built-in node type', { 
+              stepId: step.id, 
+              nodeType: step.node_type
+            });
+            // Keep node_type for built-in handlers
+            continue;
+          }
+          
           const toolId = await mapNodeTypeToToolId(step.node_type);
           if (toolId) {
             step.tool_id = toolId;

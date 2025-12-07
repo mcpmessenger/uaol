@@ -30,6 +30,11 @@ export function Header() {
       try {
         const response = await apiClient.getCurrentUser();
         if (response.success && response.data) {
+          console.log('Header: User data fetched', {
+            email: response.data.email,
+            hasAvatar: !!response.data.avatarUrl,
+            avatarUrl: response.data.avatarUrl?.substring(0, 50) || 'none'
+          });
           setUser({
             email: response.data.email || '',
             id: response.data.id || '',

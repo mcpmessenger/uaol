@@ -11,13 +11,13 @@ A comprehensive microservices platform for orchestrating AI workflows, managing 
 - **Credit System**: Built-in billing and credit management
 - **Modern Frontend**: React + TypeScript + Tailwind CSS UI
 
-## 🐛 Help Wanted: Critical Bug Bounty
+## ✅ PDF Parsing Issue - RESOLVED
 
-We're looking for help fixing a **critical PDF parsing issue** that blocks document analysis. See [`doc/PDF_PARSING_BUG_BOUNTY.md`](doc/PDF_PARSING_BUG_BOUNTY.md) for details.
+The **critical PDF parsing issue** that blocked document analysis has been **successfully resolved**! See [`doc/PDF_PARSING_BUG_BOUNTY.md`](doc/PDF_PARSING_BUG_BOUNTY.md) for details.
 
-**Status**: 🔴 Open for contribution  
-**Impact**: Blocks PDF text extraction for all users  
-**Bounty**: Community recognition + future collaboration opportunities
+**Status**: ✅ **RESOLVED** - PDF summaries are working!  
+**Resolution Date**: 2025-12-06  
+**Impact**: PDF text extraction and document analysis are now fully functional
 
 ## 📋 Prerequisites
 
@@ -244,6 +244,35 @@ docker-compose up -d
 
 ### Tools
 - `GET /tools` - List registered tools
+- `POST /tools` - Register a new MCP tool
+- `GET /tools/:toolId` - Get tool details
+- `POST /tools/:toolId/approve` - Approve a tool
+
+### Integrating MCP Tools
+
+UAOL supports integrating any MCP-compliant tool. Here are some popular integrations:
+
+#### Playwright Web Scraping
+
+Integrate Microsoft's Playwright MCP server for web scraping:
+
+```bash
+# See detailed guide
+cd backend
+cat scripts/setup-playwright-mcp.md
+
+# Quick start
+cat PLAYWRIGHT_MCP_QUICKSTART.md
+```
+
+Quick registration:
+```bash
+./scripts/register-playwright-mcp.sh --url http://localhost:3000 --token YOUR_TOKEN
+```
+
+For more information, see:
+- [Playwright MCP Setup Guide](backend/scripts/setup-playwright-mcp.md)
+- [Quick Start](backend/PLAYWRIGHT_MCP_QUICKSTART.md)
 - `POST /tools` - Register a new tool
 - `GET /tools/:id` - Get tool details
 

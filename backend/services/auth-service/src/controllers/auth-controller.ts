@@ -411,6 +411,88 @@ export const authController = {
     }
   },
 
+  async getOutlookPhoto(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.params.userId;
+      const requestingUser = (req as any).user;
+
+      // Only allow users to access their own photo
+      if (requestingUser.user_id !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You can only access your own photo',
+          },
+        });
+      }
+
+      // Get Outlook OAuth token for this user
+      const pool = getDatabasePool();
+      const tokenResult = await pool.query(
+        'SELECT access_token, token_expires_at FROM user_oauth_tokens WHERE user_id = $1 AND provider = $2',
+        [userId, 'outlook']
+      );
+
+      if (tokenResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Outlook OAuth token not found',
+          },
+        });
+      }
+
+      const { access_token, token_expires_at } = tokenResult.rows[0];
+
+      // Check if token is expired (we could refresh it, but for now just return error)
+      if (token_expires_at && new Date(token_expires_at) < new Date()) {
+        return res.status(401).json({
+          success: false,
+          error: {
+            code: 'TOKEN_EXPIRED',
+            message: 'OAuth token expired. Please sign in again.',
+          },
+        });
+      }
+
+      // Fetch photo from Microsoft Graph
+      const photoResponse = await fetch('https://graph.microsoft.com/v1.0/me/photo/$value', {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+        },
+      });
+
+      if (!photoResponse.ok) {
+        logger.warn('Failed to fetch Outlook photo', {
+          userId,
+          status: photoResponse.status,
+          statusText: photoResponse.statusText,
+        });
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Photo not found',
+          },
+        });
+      }
+
+      // Get content type and image data
+      const contentType = photoResponse.headers.get('content-type') || 'image/jpeg';
+      const imageBuffer = await photoResponse.arrayBuffer();
+
+      // Set appropriate headers and send image
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+      res.send(Buffer.from(imageBuffer));
+    } catch (error: any) {
+      logger.error('Error fetching Outlook photo', { error: error.message, stack: error.stack });
+      next(error);
+    }
+  },
+
   async getCurrentUser(req: Request, res: Response, next: NextFunction) {
     try {
       const user = (req as any).user;

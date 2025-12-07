@@ -83,3 +83,5 @@ RETURNING tool_id, name, protocol, status;
 
 **Status:** ✅ Simple solution - just add the column, skip the constraint
 
+
+

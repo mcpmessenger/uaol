@@ -44,6 +44,13 @@ if (envResult.error) {
 }
 
 // NOW import other modules (after .env is loaded)
+// Import undici fetch for reliable HTTP requests (Node.js native fetch can be unreliable)
+import { fetch as undiciFetch } from 'undici';
+// Make fetch available globally if native fetch is not available
+if (typeof globalThis.fetch === 'undefined') {
+  globalThis.fetch = undiciFetch as any;
+}
+
 import express from 'express';
 import cors from 'cors';
 import { config } from '@uaol/shared/config';
