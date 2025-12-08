@@ -175,6 +175,26 @@ services:
       postgres:
         condition: service_healthy
 
+  collaboration-service:
+    build:
+      context: .
+      dockerfile: services/collaboration-service/Dockerfile
+    container_name: uaol-collaboration-service
+    environment:
+      DATABASE_URL: postgresql://uaol:uaol_password@postgres:5432/uaol
+      AUTH_SERVICE_URL: http://auth-service:3001
+      COLLAB_SERVICE_PORT: 3007
+      COLLAB_MAX_UPDATE_BYTES: 200000
+      COLLAB_PERSIST_DEBOUNCE_MS: 5000
+      COLLAB_SESSION_TTL_MS: 3600000
+    ports:
+      - "3007:3007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+
 volumes:
   cockroachdb_data:
   postgres_data:

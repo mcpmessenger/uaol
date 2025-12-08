@@ -3,18 +3,27 @@ import { createLogger } from '@uaol/shared/logger';
 import { getDatabasePool } from '@uaol/shared/database/connection';
 import { WorkflowDefinition } from '@uaol/shared/database/models/processing-job';
 import { WorkflowModel } from '@uaol/shared/database/models/workflow';
+import { ShareableLinkModel, ShareablePermission } from '@uaol/shared/database/models/shareable-link';
 import { mapNodeTypeToToolId, validateWorkflowTools, getAvailableToolsForNodeType } from '../services/tool-mapper';
 
 const logger = createLogger('workflow-controller');
 
 // Lazy initialization - don't create model until we actually need it
 let workflowModel: WorkflowModel | null = null;
+let shareableLinkModel: ShareableLinkModel | null = null;
 
 function getWorkflowModel(): WorkflowModel {
   if (!workflowModel) {
     workflowModel = new WorkflowModel(getDatabasePool());
   }
   return workflowModel;
+}
+
+function getShareableLinkModel(): ShareableLinkModel {
+  if (!shareableLinkModel) {
+    shareableLinkModel = new ShareableLinkModel(getDatabasePool());
+  }
+  return shareableLinkModel;
 }
 
 export const workflowController = {
@@ -205,6 +214,142 @@ export const workflowController = {
   },
 
   /**
+   * Create a shareable link for a workflow
+   */
+  async createShareLink(req: Request, res: Response, next: NextFunction) {
+    try {
+      const user = (req as any).user;
+      const userId = user?.user_id || 'guest';
+      const { workflowId } = req.params;
+      const { permission = 'editor', expiresAt } = req.body || {};
+
+      if (!workflowId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'workflowId is required',
+          },
+        });
+      }
+
+      if (!['read', 'editor'].includes(permission)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'permission must be "read" or "editor"',
+          },
+        });
+      }
+
+      const model = getWorkflowModel();
+      const workflow = await model.findById(workflowId);
+
+      if (!workflow) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Workflow not found',
+          },
+        });
+      }
+
+      if (workflow.user_id !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You do not have access to this workflow',
+          },
+        });
+      }
+
+      const shareModel = getShareableLinkModel();
+      const expiresDate = expiresAt ? new Date(expiresAt) : null;
+      const link = await shareModel.create(workflowId, permission as ShareablePermission, userId, expiresDate);
+
+      res.json({
+        success: true,
+        data: {
+          shareableLinkId: link.shareable_link_id,
+          token: link.access_token,
+          permission: link.permission,
+          expiresAt: link.expires_at,
+        },
+      });
+    } catch (error: any) {
+      logger.error('Failed to create share link', { error: error.message });
+      next(error);
+    }
+  },
+
+  /**
+   * List shareable links for a workflow
+   */
+  async listShareLinks(req: Request, res: Response, next: NextFunction) {
+    try {
+      const user = (req as any).user;
+      const userId = user?.user_id || 'guest';
+      const { workflowId } = req.params;
+
+      if (!workflowId) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'workflowId is required',
+          },
+        });
+      }
+
+      const model = getWorkflowModel();
+      const workflow = await model.findById(workflowId);
+
+      if (!workflow) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Workflow not found',
+          },
+        });
+      }
+
+      if (workflow.user_id !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'You do not have access to this workflow',
+          },
+        });
+      }
+
+      const shareModel = getShareableLinkModel();
+      const links = await shareModel.listByWorkflow(workflowId);
+
+      res.json({
+        success: true,
+        data: {
+          links: links.map(link => ({
+            shareableLinkId: link.shareable_link_id,
+            permission: link.permission,
+            expiresAt: link.expires_at,
+            createdAt: link.created_at,
+            createdBy: link.created_by,
+            token: link.access_token,
+          })),
+        },
+      });
+    } catch (error: any) {
+      logger.error('Failed to list share links', { error: error.message });
+      next(error);
+    }
+  },
+
+  /**
    * Execute a workflow
    */
   async executeWorkflow(req: Request, res: Response, next: NextFunction) {
@@ -241,7 +386,8 @@ export const workflowController = {
       // Built-in node types don't require tool registration
       const BUILT_IN_NODE_TYPES = ['file-upload', 'text-extraction', 'rag-indexing', 'rag-query', 'ai-generation'];
       
-      const workflowDef = { ...workflow.workflowDefinition };
+      // Note: DB column is workflow_definition (snake_case)
+      const workflowDef = { ...workflow.workflow_definition } as any;
       // Include inputs in workflow definition for execution
       if (inputs) {
         (workflowDef as any).inputs = inputs;

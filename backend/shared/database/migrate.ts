@@ -119,6 +119,27 @@ async function runMigrations() {
       }
     }
 
+    // Migration: Add shareable links table
+    const shareableLinksMigrationPath = join(__dirname, 'migrations', 'add-shareable-links.sql');
+    try {
+      const shareableLinksMigration = readFileSync(shareableLinksMigrationPath, 'utf-8');
+      await client.query(shareableLinksMigration);
+      logger.info('Shareable links migration completed');
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        logger.warn('Shareable links migration file not found, skipping...');
+      } else if (
+        error.code === '42710' ||
+        error.message?.includes('already exists') ||
+        error.message?.includes('duplicate key') ||
+        (error.message?.includes('column') && error.message?.includes('already exists'))
+      ) {
+        logger.info('Shareable links migration already applied, skipping...');
+      } else {
+        logger.warn('Shareable links migration error (may already be applied):', error.message);
+      }
+    }
+
     logger.info('Database migrations completed successfully');
   } catch (error) {
     logger.error('Migration failed', error);

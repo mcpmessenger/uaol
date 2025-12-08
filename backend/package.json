@@ -9,7 +9,7 @@
     "shared"
   ],
   "scripts": {
-    "dev": "concurrently -n \"api-gateway,auth,tool-registry,job-orch,tool-proxy,billing,storage\" -c \"cyan,magenta,green,yellow,blue,red,white\" \"npm run dev --workspace=@uaol/api-gateway\" \"npm run dev --workspace=@uaol/auth-service\" \"npm run dev --workspace=@uaol/tool-registry-service\" \"npm run dev --workspace=@uaol/job-orchestration-service\" \"npm run dev --workspace=@uaol/tool-proxy-service\" \"npm run dev --workspace=@uaol/billing-service\" \"npm run dev --workspace=@uaol/storage-service\"",
+    "dev": "concurrently -n \"api-gateway,auth,tool-registry,job-orch,tool-proxy,billing,storage,collab\" -c \"cyan,magenta,green,yellow,blue,red,white,gray\" \"npm run dev --workspace=@uaol/api-gateway\" \"npm run dev --workspace=@uaol/auth-service\" \"npm run dev --workspace=@uaol/tool-registry-service\" \"npm run dev --workspace=@uaol/job-orchestration-service\" \"npm run dev --workspace=@uaol/tool-proxy-service\" \"npm run dev --workspace=@uaol/billing-service\" \"npm run dev --workspace=@uaol/storage-service\" \"npm run dev --workspace=@uaol/collaboration-service\"",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "lint": "eslint . --ext .ts",

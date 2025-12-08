@@ -3,10 +3,12 @@ import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { WorkflowBuilder, WorkflowDefinition } from "@/components/workflow/WorkflowBuilder";
 import { WorkflowTabs } from "@/components/workflow/WorkflowTabs";
-import { convertFromBackendFormat } from "@/components/workflow/workflowConverter";
+import { convertFromBackendFormat, convertToBackendFormat } from "@/components/workflow/workflowConverter";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { apiClient } from "@/lib/api/client";
+
+const COLLAB_WS_URL = import.meta.env.VITE_COLLAB_WS_URL || 'ws://localhost:3007';
 
 interface WorkflowTab {
   id: string;
@@ -15,6 +17,9 @@ interface WorkflowTab {
   workflowId?: string;
   isDirty?: boolean;
   isNew?: boolean;
+  shareableLinkId?: string;
+  shareToken?: string;
+  sharePermission?: 'read' | 'editor';
 }
 
 const WorkflowBuilderPage = () => {
@@ -131,6 +136,29 @@ const WorkflowBuilderPage = () => {
                 };
               }
 
+              let shareableLinkId: string | undefined;
+              let shareToken: string | undefined;
+              let sharePermission: 'read' | 'editor' = 'editor';
+
+              try {
+                const shareLinks = await apiClient.listShareLinks(wf.workflowId);
+                if (shareLinks.success && shareLinks.data?.links?.length) {
+                  const link = shareLinks.data.links.find((l: any) => l.permission === 'editor') || shareLinks.data.links[0];
+                  shareableLinkId = link?.shareableLinkId;
+                  shareToken = link?.token;
+                  sharePermission = link?.permission || 'editor';
+                } else {
+                  const created = await apiClient.createShareLink(wf.workflowId, 'editor');
+                  if (created.success && created.data) {
+                    shareableLinkId = created.data.shareableLinkId;
+                    shareToken = created.data.token;
+                    sharePermission = created.data.permission || 'editor';
+                  }
+                }
+              } catch (shareError) {
+                console.warn(`[WorkflowBuilderPage] Failed to load share link for workflow ${wf.workflowId}`, shareError);
+              }
+
               return {
                 id: wf.workflowId,
                 name: wf.name,
@@ -138,6 +166,9 @@ const WorkflowBuilderPage = () => {
                 workflow: frontendWorkflow,
                 isDirty: false,
                 isNew: false,
+                shareableLinkId,
+                shareToken,
+                sharePermission,
               } as WorkflowTab;
             }
           } catch (error) {
@@ -213,16 +244,32 @@ const WorkflowBuilderPage = () => {
     if (!tab || !tab.workflow) return;
 
     try {
+      const backendDefinition = convertToBackendFormat(tab.workflow.nodes, tab.workflow.edges, tab.name);
       const response = await apiClient.createWorkflow({
         name: tab.name,
         description: `Workflow: ${tab.name}`,
-        workflowDefinition: tab.workflow,
+        workflowDefinition: backendDefinition,
       });
 
       if (response.success && response.data?.workflowId) {
+        let shareableLinkId: string | undefined;
+        let shareToken: string | undefined;
+        let sharePermission: 'read' | 'editor' = 'editor';
+
+        try {
+          const created = await apiClient.createShareLink(response.data.workflowId, 'editor');
+          if (created.success && created.data) {
+            shareableLinkId = created.data.shareableLinkId;
+            shareToken = created.data.token;
+            sharePermission = created.data.permission || 'editor';
+          }
+        } catch (error) {
+          console.warn('Failed to create share link for saved workflow', error);
+        }
+
         setTabs(prev => prev.map(t => 
           t.id === tabId 
-            ? { ...t, workflowId: response.data.workflowId, isDirty: false, isNew: false }
+            ? { ...t, workflowId: response.data.workflowId, isDirty: false, isNew: false, shareableLinkId, shareToken, sharePermission }
             : t
         ));
         return true;
@@ -280,6 +327,16 @@ const WorkflowBuilderPage = () => {
                 workflowName={activeTab.name}
                 isDirty={activeTab.isDirty}
                 onSave={handleSave}
+                workflowId={activeTab.workflowId}
+                collabConfig={
+                  activeTab.shareableLinkId && activeTab.shareToken
+                    ? {
+                        shareableLinkId: activeTab.shareableLinkId,
+                        token: activeTab.shareToken,
+                        permission: activeTab.sharePermission,
+                      }
+                    : undefined
+                }
                 onNameChange={(name) => {
                   setTabs(prev => prev.map(t => 
                     t.id === activeTab.id ? { ...t, name, isDirty: true } : t

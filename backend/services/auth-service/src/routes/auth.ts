@@ -25,4 +25,5 @@ authRoutes.post('/register', authController.register);
 authRoutes.post('/login', authController.login);
 authRoutes.post('/logout', authenticate, authController.logout);
 authRoutes.get('/me', authenticate, authController.getCurrentUser);
+authRoutes.post('/share-links/validate', authController.validateShareLink);
 

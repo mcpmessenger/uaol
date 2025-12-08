@@ -756,11 +756,27 @@ ${context ? 'Additionally, you have access to RAG-retrieved context from the use
 
   // Workflow management endpoints
   const { workflowController } = await import('./controllers/workflow-controller.js');
-  app.post('/workflows', optionalAuthenticate, workflowController.createWorkflow);
-  app.get('/workflows', optionalAuthenticate, workflowController.getWorkflows);
-  app.get('/workflows/:workflowId', optionalAuthenticate, workflowController.getWorkflow);
-  app.post('/workflows/:workflowId/execute', optionalAuthenticate, workflowController.executeWorkflow);
-  app.get('/workflows/tools/:nodeType', optionalAuthenticate, workflowController.getAvailableTools);
+  // Reject guests for workflow CRUD/share/execute
+  const requireAuth = (req: any, res: any, next: any) => {
+    if (req.isGuest) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'AUTHENTICATION_REQUIRED',
+          message: 'Please sign in to manage or share workflows.',
+        },
+      });
+    }
+    next();
+  };
+
+  app.post('/workflows', optionalAuthenticate, requireAuth, workflowController.createWorkflow);
+  app.get('/workflows', optionalAuthenticate, requireAuth, workflowController.getWorkflows);
+  app.get('/workflows/:workflowId', optionalAuthenticate, requireAuth, workflowController.getWorkflow);
+  app.post('/workflows/:workflowId/share-links', optionalAuthenticate, requireAuth, workflowController.createShareLink);
+  app.get('/workflows/:workflowId/share-links', optionalAuthenticate, requireAuth, workflowController.listShareLinks);
+  app.post('/workflows/:workflowId/execute', optionalAuthenticate, requireAuth, workflowController.executeWorkflow);
+  app.get('/workflows/tools/:nodeType', optionalAuthenticate, requireAuth, workflowController.getAvailableTools);
 
   app.use('/jobs', createProxyMiddleware({
     target: `http://localhost:${config.services.jobOrchestration.port}`,

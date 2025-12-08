@@ -304,6 +304,17 @@ class ApiClient {
     return this.request(`/workflows/${workflowId}`);
   }
 
+  async createShareLink(workflowId: string, permission: 'read' | 'editor' = 'editor', expiresAt?: string): Promise<ApiResponse<any>> {
+    return this.request(`/workflows/${workflowId}/share-links`, {
+      method: 'POST',
+      body: JSON.stringify({ permission, expiresAt }),
+    });
+  }
+
+  async listShareLinks(workflowId: string): Promise<ApiResponse<any>> {
+    return this.request(`/workflows/${workflowId}/share-links`);
+  }
+
   async executeWorkflow(workflowId: string, inputs?: Record<string, any>): Promise<ApiResponse<{ jobId: string }>> {
     return this.request(`/workflows/${workflowId}/execute`, {
       method: 'POST',

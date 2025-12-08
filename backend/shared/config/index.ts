@@ -135,6 +135,14 @@ export const config = {
     storage: {
       port: parseInt(process.env.STORAGE_SERVICE_PORT || '3006', 10),
     },
+    collaboration: {
+      port: parseInt(
+        process.env.COLLABORATION_SERVICE_PORT ||
+          process.env.COLLAB_SERVICE_PORT ||
+          '3007',
+        10
+      ),
+    },
   },
   secrets: {
     managerType: (process.env.SECRETS_MANAGER_TYPE || 'aws-secrets-manager') as 'aws-secrets-manager' | 'vault',

@@ -11,6 +11,9 @@ interface WorkflowTab {
   workflowId?: string; // If loaded from server
   isDirty?: boolean; // Has unsaved changes
   isNew?: boolean; // New unsaved workflow
+  shareableLinkId?: string;
+  shareToken?: string;
+  sharePermission?: 'read' | 'editor';
 }
 
 interface WorkflowTabsProps {

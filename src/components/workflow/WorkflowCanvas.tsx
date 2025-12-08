@@ -28,6 +28,7 @@ interface WorkflowCanvasProps {
   isExecuting: boolean;
   onNodeDragStart?: (nodeId: string) => void;
   onNodeDragStop?: () => void;
+  isReadOnly?: boolean;
 }
 
 const nodeTypes: NodeTypes = {
@@ -47,6 +48,7 @@ export function WorkflowCanvas({
   isExecuting,
   onNodeDragStart,
   onNodeDragStop,
+  isReadOnly = false,
 }: WorkflowCanvasProps) {
   // Convert our WorkflowNode format to ReactFlow Node format
   const reactFlowNodes: Node[] = useMemo(() => {
@@ -98,6 +100,7 @@ export function WorkflowCanvas({
 
   // Sync internal changes back to parent
   const handleNodesChange = useCallback((changes: any) => {
+    if (isReadOnly) return;
     onNodesChangeInternal(changes);
     // Convert back to our format and notify parent
     const updatedNodes = reactFlowNodesState.map(node => ({
@@ -110,9 +113,10 @@ export function WorkflowCanvas({
       },
     }));
     onNodesChange(updatedNodes);
-  }, [onNodesChangeInternal, reactFlowNodesState, onNodesChange]);
+  }, [onNodesChangeInternal, reactFlowNodesState, onNodesChange, isReadOnly]);
 
   const handleEdgesChange = useCallback((changes: any) => {
+    if (isReadOnly) return;
     onEdgesChangeInternal(changes);
     // Convert back to our format and notify parent
     const updatedEdges = reactFlowEdgesState.map(edge => ({
@@ -123,7 +127,7 @@ export function WorkflowCanvas({
       targetHandle: edge.targetHandle,
     }));
     onEdgesChange(updatedEdges);
-  }, [onEdgesChangeInternal, reactFlowEdgesState, onEdgesChange]);
+  }, [onEdgesChangeInternal, reactFlowEdgesState, onEdgesChange, isReadOnly]);
 
   const onConnect = useCallback(
     (params: Connection) => {

@@ -5,6 +5,10 @@
 
 import { config } from '../config/index.js';
 import { createLogger } from '../logger/index.js';
+import { createRequire } from 'module';
+
+// Use createRequire so "require" works in ESM/TS
+const require = createRequire(import.meta.url);
 
 const logger = createLogger('mq');
 
@@ -204,40 +208,47 @@ class KafkaConsumer implements QueueConsumer {
 
 // SQS implementation
 class SQSProducer implements QueueProducer {
-  private client: any;
-  private queueUrl: string;
-
-  constructor() {
-    try {
-      const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
-      
-      this.client = new SQSClient({
-        region: config.mq.sqs.region,
-        credentials: config.aws.accessKeyId && config.aws.secretAccessKey ? {
-          accessKeyId: config.aws.accessKeyId,
-          secretAccessKey: config.aws.secretAccessKey,
-        } : undefined,
-      });
-
-      this.queueUrl = config.mq.sqs.queueUrl;
-      logger.info('SQS producer initialized', { region: config.mq.sqs.region, queueUrl: this.queueUrl });
-    } catch (error: any) {
-      if (error.code === 'MODULE_NOT_FOUND') {
-        logger.warn('@aws-sdk/client-sqs not installed. Install with: npm install @aws-sdk/client-sqs');
-      } else {
-        logger.error('Failed to initialize SQS producer', { error: error.message });
-      }
-    }
-  }
+  private client: any | null = null;
+  private queueUrl: string = config.mq.sqs.queueUrl;
 
   async send(message: QueueMessage): Promise<void> {
-    if (!this.client || !this.queueUrl) {
-      logger.warn('SQS producer not available, message not sent', { messageId: message.id });
+    if (!this.queueUrl) {
+      logger.warn('SQS queueUrl not configured; message not sent', { messageId: message.id });
       return;
     }
 
+    if (!this.client) {
+      try {
+        const { SQSClient } = await import('@aws-sdk/client-sqs');
+        this.client = new SQSClient({
+          region: config.mq.sqs.region,
+          credentials:
+            config.aws.accessKeyId && config.aws.secretAccessKey
+              ? {
+                  accessKeyId: config.aws.accessKeyId,
+                  secretAccessKey: config.aws.secretAccessKey,
+                }
+              : undefined,
+        });
+        logger.info('SQS producer initialized', {
+          region: config.mq.sqs.region,
+          queueUrl: this.queueUrl,
+        });
+      } catch (error: any) {
+        if (error?.code === 'MODULE_NOT_FOUND') {
+          logger.warn('@aws-sdk/client-sqs not installed. Install with: npm install @aws-sdk/client-sqs');
+        } else {
+          logger.error('Failed to initialize SQS producer', { error: error?.message });
+        }
+        if (!this.client) {
+          logger.warn('SQS producer not available, message not sent', { messageId: message.id });
+          return;
+        }
+      }
+    }
+
     try {
-      const { SendMessageCommand } = require('@aws-sdk/client-sqs');
+      const { SendMessageCommand } = await import('@aws-sdk/client-sqs');
       
       const command = new SendMessageCommand({
         QueueUrl: this.queueUrl,
@@ -263,34 +274,11 @@ class SQSProducer implements QueueProducer {
 }
 
 class SQSConsumer implements QueueConsumer {
-  private client: any;
-  private queueUrl: string;
+  private client: any | null = null;
+  private queueUrl: string = config.mq.sqs.queueUrl;
   private handlers: Map<string, (message: QueueMessage) => Promise<void>> = new Map();
   private isRunning = false;
-  private pollingInterval: NodeJS.Timeout | null = null;
-
-  constructor() {
-    try {
-      const { SQSClient } = require('@aws-sdk/client-sqs');
-      
-      this.client = new SQSClient({
-        region: config.mq.sqs.region,
-        credentials: config.aws.accessKeyId && config.aws.secretAccessKey ? {
-          accessKeyId: config.aws.accessKeyId,
-          secretAccessKey: config.aws.secretAccessKey,
-        } : undefined,
-      });
-
-      this.queueUrl = config.mq.sqs.queueUrl;
-      logger.info('SQS consumer initialized', { region: config.mq.sqs.region, queueUrl: this.queueUrl });
-    } catch (error: any) {
-      if (error.code === 'MODULE_NOT_FOUND') {
-        logger.warn('@aws-sdk/client-sqs not installed. Install with: npm install @aws-sdk/client-sqs');
-      } else {
-        logger.error('Failed to initialize SQS consumer', { error: error.message });
-      }
-    }
-  }
+  private pollingLoop: Promise<void> | null = null;
 
   async subscribe(topic: string, handler: (message: QueueMessage) => Promise<void>): Promise<void> {
     this.handlers.set(topic, handler);
@@ -298,83 +286,139 @@ class SQSConsumer implements QueueConsumer {
   }
 
   async start(): Promise<void> {
-    if (!this.client || !this.queueUrl || this.isRunning) {
+    if (this.isRunning) {
+      return;
+    }
+
+    if (!this.queueUrl) {
+      logger.warn('SQS queueUrl not configured; consumer not started');
+      return;
+    }
+
+    try {
+      await this.ensureClient();
+    } catch {
+      logger.warn('SQS consumer not available; start aborted');
       return;
     }
 
     this.isRunning = true;
     logger.info('SQS consumer started');
 
-    // Start long polling
-    this.pollMessages();
+    // fire-and-forget polling loop
+    this.pollingLoop = this.pollMessages();
   }
 
   private async pollMessages(): Promise<void> {
-    if (!this.isRunning) {
-      return;
-    }
+    const { ReceiveMessageCommand, DeleteMessageCommand } = await import('@aws-sdk/client-sqs');
+    const client = await this.ensureClient();
+    if (!client) return;
 
-    try {
-      const { ReceiveMessageCommand, DeleteMessageCommand } = require('@aws-sdk/client-sqs');
-      
-      const command = new ReceiveMessageCommand({
-        QueueUrl: this.queueUrl,
-        MaxNumberOfMessages: 10,
-        WaitTimeSeconds: 20, // Long polling
-        MessageAttributeNames: ['All'],
-      });
+    while (this.isRunning) {
+      try {
+        const response = await client.send(
+          new ReceiveMessageCommand({
+            QueueUrl: this.queueUrl,
+            MaxNumberOfMessages: 1,
+            WaitTimeSeconds: 20, // long polling
+            MessageAttributeNames: ['All'],
+          }),
+        );
 
-      const response = await this.client.send(command);
-      const messages = response.Messages || [];
-
-      for (const sqsMessage of messages) {
-        try {
-          const queueMessage: QueueMessage = JSON.parse(sqsMessage.Body);
-          const messageType = sqsMessage.MessageAttributes?.type?.StringValue || queueMessage.type;
-          
-          const handler = this.handlers.get(messageType);
-          if (handler) {
-            logger.debug('Processing message', { messageId: queueMessage.id, type: messageType });
-            await handler(queueMessage);
-
-            // Delete message after successful processing
-            const deleteCommand = new DeleteMessageCommand({
-              QueueUrl: this.queueUrl,
-              ReceiptHandle: sqsMessage.ReceiptHandle,
-            });
-            await this.client.send(deleteCommand);
-          } else {
-            logger.warn('No handler for message type', { messageId: queueMessage.id, type: messageType });
-          }
-        } catch (error: any) {
-          logger.error('Error processing SQS message', { 
-            error: error.message,
-            messageId: sqsMessage.MessageId,
-          });
-          // Continue processing other messages
+        const messages = response.Messages || [];
+        if (!messages.length) {
+          await this.delay(1000);
+          continue;
         }
-      }
 
-      // Continue polling
-      if (this.isRunning) {
-        this.pollingInterval = setTimeout(() => this.pollMessages(), 100);
-      }
-    } catch (error: any) {
-      logger.error('Error polling SQS messages', { error: error.message });
-      // Retry after a delay
-      if (this.isRunning) {
-        this.pollingInterval = setTimeout(() => this.pollMessages(), 5000);
+        for (const sqsMessage of messages) {
+          try {
+            const body = sqsMessage.Body;
+            if (!body) {
+              logger.warn('Received SQS message without body', { messageId: sqsMessage.MessageId });
+              continue;
+            }
+
+            const queueMessage: QueueMessage = JSON.parse(body);
+            const messageType = sqsMessage.MessageAttributes?.type?.StringValue || queueMessage.type;
+            const handler = messageType ? this.handlers.get(messageType) : undefined;
+
+            if (handler) {
+              logger.debug('Processing message', { messageId: queueMessage.id, type: messageType });
+              await handler(queueMessage);
+
+              if (sqsMessage.ReceiptHandle) {
+                await client.send(
+                  new DeleteMessageCommand({
+                    QueueUrl: this.queueUrl,
+                    ReceiptHandle: sqsMessage.ReceiptHandle,
+                  }),
+                );
+              } else {
+                logger.warn('Missing ReceiptHandle on SQS message; cannot delete', {
+                  messageId: sqsMessage.MessageId,
+                });
+              }
+            } else {
+              logger.warn('No handler for message type', { messageId: queueMessage.id, type: messageType });
+            }
+          } catch (error: any) {
+            logger.error('Error processing SQS message', {
+              error: error?.message,
+              messageId: sqsMessage.MessageId,
+            });
+          }
+        }
+      } catch (error: any) {
+        logger.error('Error polling SQS messages', { error: error?.message });
+        await this.delay(5000);
       }
     }
   }
 
   async stop(): Promise<void> {
     this.isRunning = false;
-    if (this.pollingInterval) {
-      clearTimeout(this.pollingInterval);
-      this.pollingInterval = null;
+    try {
+      await this.pollingLoop;
+    } catch (error: any) {
+      logger.error('Error stopping SQS consumer', { error: error?.message });
+    } finally {
+      this.pollingLoop = null;
+      logger.info('SQS consumer stopped');
     }
-    logger.info('SQS consumer stopped');
+  }
+
+  private async ensureClient(): Promise<any | null> {
+    if (this.client) {
+      return this.client;
+    }
+
+    try {
+      const { SQSClient } = await import('@aws-sdk/client-sqs');
+      this.client = new SQSClient({
+        region: config.mq.sqs.region,
+        credentials:
+          config.aws.accessKeyId && config.aws.secretAccessKey
+            ? {
+                accessKeyId: config.aws.accessKeyId,
+                secretAccessKey: config.aws.secretAccessKey,
+              }
+            : undefined,
+      });
+      logger.info('SQS consumer initialized', { region: config.mq.sqs.region, queueUrl: this.queueUrl });
+      return this.client;
+    } catch (error: any) {
+      if (error?.code === 'MODULE_NOT_FOUND') {
+        logger.warn('@aws-sdk/client-sqs not installed. Install with: npm install @aws-sdk/client-sqs');
+      } else {
+        logger.error('Failed to initialize SQS consumer', { error: error?.message });
+      }
+      return null;
+    }
+  }
+
+  private async delay(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 

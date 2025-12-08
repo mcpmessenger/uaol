@@ -1,11 +1,13 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from 'react';
+import * as Y from '../../vendor/yjs';
 import { motion } from 'framer-motion';
 import { GlassPanel } from '@/components/ui/GlassPanel';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { NodeConfigPanel } from './NodeConfigPanel';
 import { WorkflowToolbar } from './WorkflowToolbar';
-import { Save, Play, Trash2, RotateCcw } from 'lucide-react';
+import { Save, Play, Trash2, RotateCcw, Share2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface WorkflowNode {
@@ -33,6 +35,12 @@ export interface WorkflowDefinition {
   edges: WorkflowEdge[];
 }
 
+type CollaborationConfig = {
+  shareableLinkId: string;
+  token: string;
+  permission?: 'read' | 'editor';
+};
+
 interface WorkflowBuilderProps {
   onClose?: () => void;
   initialWorkflow?: WorkflowDefinition;
@@ -43,6 +51,9 @@ interface WorkflowBuilderProps {
   onSave?: (tabId: string) => Promise<boolean>;
   onNameChange?: (name: string) => void;
   onWorkflowChange?: (workflow: WorkflowDefinition) => void;
+  workflowId?: string;
+  collabConfig?: CollaborationConfig;
+  collabUrl?: string;
 }
 
 export function WorkflowBuilder({ 
@@ -55,6 +66,9 @@ export function WorkflowBuilder({
   onSave,
   onNameChange,
   onWorkflowChange,
+  workflowId,
+  collabConfig,
+  collabUrl,
 }: WorkflowBuilderProps) {
   // Initialize nodes and edges
   const [nodes, setNodes] = useState<WorkflowNode[]>(() => {
@@ -69,6 +83,30 @@ export function WorkflowBuilder({
   const [executionStatus, setExecutionStatus] = useState<Record<string, 'pending' | 'running' | 'success' | 'error'>>({});
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [isOverTrash, setIsOverTrash] = useState(false);
+  const [collabStatus, setCollabStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>(collabConfig ? 'connecting' : 'idle');
+  const [collabPermission, setCollabPermission] = useState<'read' | 'editor'>(collabConfig?.permission || 'editor');
+  const [collabError, setCollabError] = useState<string | null>(null);
+  const [shareLinkId, setShareLinkId] = useState<string | undefined>(collabConfig?.shareableLinkId);
+  const [shareToken, setShareToken] = useState<string | undefined>(collabConfig?.token);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const docRef = useRef<Y.Doc | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const isApplyingRemoteRef = useRef(false);
+  const collabPermissionRef = useRef(collabPermission);
+  const collabWsUrl = useMemo(() => {
+    const raw = collabUrl || import.meta.env.VITE_COLLAB_WS_URL || 'ws://localhost:3007/ws/collab';
+    try {
+      const parsed = new URL(raw);
+      if (!parsed.pathname || parsed.pathname === '/' || parsed.pathname === '') {
+        parsed.pathname = '/ws/collab';
+      }
+      return parsed.toString();
+    } catch {
+      const normalized = raw.endsWith('/ws/collab') ? raw : `${raw.replace(/\/$/, '')}/ws/collab`;
+      return normalized;
+    }
+  }, [collabUrl]);
   
   // Undo/Redo history
   type WorkflowState = { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
@@ -156,6 +194,162 @@ export function WorkflowBuilder({
     }
   }, [propWorkflowName]);
 
+  // Keep the current permission in a ref for socket send logic
+  useEffect(() => {
+    collabPermissionRef.current = collabPermission;
+  }, [collabPermission]);
+
+  useEffect(() => {
+    setShareLinkId(collabConfig?.shareableLinkId);
+    setShareToken(collabConfig?.token);
+    if (collabConfig?.permission) {
+      setCollabPermission(collabConfig.permission);
+    }
+  }, [collabConfig]);
+
+  // Initialize Yjs doc and hydrate state from it
+  useEffect(() => {
+    if (!docRef.current) {
+      docRef.current = new Y.Doc();
+      const map = docRef.current.getMap('workflow');
+      const initialDef = initialWorkflow || getDefaultDocumentAnalysisWorkflow();
+      map.set('definition', initialDef);
+      map.set('name', initialDef.name);
+    }
+
+    const doc = docRef.current;
+    const map = doc.getMap('workflow');
+
+    const applyFromDoc = () => {
+      const definition = map.get('definition') as WorkflowDefinition | undefined;
+      if (definition) {
+        isApplyingRemoteRef.current = true;
+        setNodes(definition.nodes || []);
+        setEdges(definition.edges || []);
+        setWorkflowName(definition.name || workflowName);
+        // Keep the flag true through the next effect flush so we don't
+        // immediately write the same state back into the doc and loop.
+        setTimeout(() => {
+          isApplyingRemoteRef.current = false;
+        }, 0);
+      }
+    };
+
+    applyFromDoc();
+    const onUpdate = () => applyFromDoc();
+    doc.on('update', onUpdate);
+
+    return () => {
+      doc.off('update', onUpdate);
+    };
+  }, [initialWorkflow]);
+
+  // Push local state changes into the Yjs doc (broadcasted via socket when connected)
+  useEffect(() => {
+    if (isApplyingRemoteRef.current) return;
+    if (!docRef.current) return;
+
+    const doc = docRef.current;
+    const map = doc.getMap('workflow');
+    const definition = (map.get('definition') as WorkflowDefinition | undefined) || {
+      name: workflowName,
+      nodes: [],
+      edges: [],
+    };
+
+    const nextDefinition: WorkflowDefinition = {
+      ...definition,
+      name: workflowName,
+      nodes,
+      edges,
+    };
+
+    doc.transact(() => {
+      map.set('definition', nextDefinition);
+      map.set('name', nextDefinition.name);
+    }, 'local-state');
+  }, [nodes, edges, workflowName]);
+
+  // WebSocket collaboration wiring
+  useEffect(() => {
+    if (!collabConfig || !collabConfig.shareableLinkId || !collabConfig.token) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setCollabStatus('idle');
+      return;
+    }
+
+    if (!docRef.current) {
+      return;
+    }
+
+    setCollabStatus('connecting');
+    setCollabError(null);
+
+    const url = new URL(collabWsUrl);
+    url.searchParams.set('shareableLinkId', collabConfig.shareableLinkId);
+    url.searchParams.set('token', collabConfig.token);
+    if (workflowId) {
+      url.searchParams.set('workflowId', workflowId);
+    }
+
+    const ws = new WebSocket(url.toString());
+    ws.binaryType = 'arraybuffer';
+    wsRef.current = ws;
+    const doc = docRef.current;
+
+    const handleDocUpdate = (update: Uint8Array, origin: any) => {
+      if (origin === 'remote') return;
+      if (collabPermissionRef.current === 'read') return;
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(update);
+      }
+    };
+
+    doc.on('update', handleDocUpdate);
+
+    ws.onopen = () => {
+      setCollabStatus('connected');
+    };
+
+    ws.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        try {
+          const message = JSON.parse(event.data as string);
+          if (message.permission) {
+            setCollabPermission(message.permission);
+          }
+          if (message.type === 'connected' && message.permission) {
+            setCollabStatus('connected');
+          }
+        } catch (error) {
+          console.warn('[WorkflowBuilder] Failed to parse collaboration message', error);
+        }
+      } else {
+        const update = new Uint8Array(event.data as ArrayBuffer);
+        Y.applyUpdate(doc, update, 'remote');
+      }
+    };
+
+    ws.onerror = () => {
+      setCollabStatus('error');
+      setCollabError('Collaboration connection error');
+    };
+
+    ws.onclose = () => {
+      setCollabStatus(collabConfig ? 'error' : 'idle');
+    };
+
+    return () => {
+      doc.off('update', handleDocUpdate);
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+    };
+  }, [collabConfig?.shareableLinkId, collabConfig?.token, collabWsUrl, workflowId]);
+
   // Sync historyIndexRef with state
   useEffect(() => {
     historyIndexRef.current = historyIndex;
@@ -163,7 +357,7 @@ export function WorkflowBuilder({
 
   // Save state to history when nodes or edges change (but not during undo/redo)
   useEffect(() => {
-    if (isInitialMount.current || isUndoRedoRef.current) {
+    if (isInitialMount.current || isUndoRedoRef.current || isApplyingRemoteRef.current) {
       isUndoRedoRef.current = false;
       return;
     }
@@ -199,21 +393,27 @@ export function WorkflowBuilder({
       };
       onWorkflowChange(workflow);
     }
-  }, [nodes, edges, workflowName, onWorkflowChange]);
+    // Intentionally exclude onWorkflowChange to avoid infinite loops when parents
+    // pass a new inline callback each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges, workflowName]);
 
   const selectedNodeData = nodes.find(n => n.id === selectedNode) || null;
+  const isReadOnly = collabPermission === 'read';
 
   const handleNodeSelect = useCallback((nodeId: string | null) => {
     setSelectedNode(nodeId);
   }, []);
 
   const handleNodeChange = useCallback((nodeId: string, data: Partial<WorkflowNode['data']>) => {
+    if (isReadOnly) return;
     setNodes(prev => prev.map(node => 
       node.id === nodeId ? { ...node, data: { ...node.data, ...data } } : node
     ));
-  }, []);
+  }, [isReadOnly]);
 
   const handleAddMCPTool = useCallback((toolId: string, method: string, toolName: string) => {
+    if (isReadOnly) return;
     const position = { x: Math.random() * 400 + 200, y: Math.random() * 300 + 100 };
     const newNode: WorkflowNode = {
       id: `node-${Date.now()}`,
@@ -227,9 +427,10 @@ export function WorkflowBuilder({
       },
     };
     setNodes(prev => [...prev, newNode]);
-  }, []);
+  }, [isReadOnly]);
 
   const handleAddNode = useCallback((type: WorkflowNode['type'], position: { x: number; y: number }) => {
+    if (isReadOnly) return;
     console.log(`[WorkflowBuilder] handleAddNode called:`, { type, position });
     
     // Validate node type
@@ -257,14 +458,16 @@ export function WorkflowBuilder({
   }, []);
 
   const handleDeleteNode = useCallback((nodeId: string) => {
+    if (isReadOnly) return;
     setNodes(prev => prev.filter(n => n.id !== nodeId));
     setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId));
     if (selectedNode === nodeId) {
       setSelectedNode(null);
     }
-  }, [selectedNode]);
+  }, [selectedNode, isReadOnly]);
 
   const handleUndo = useCallback(() => {
+    if (isReadOnly) return;
     if (historyIndexRef.current > 0) {
       isUndoRedoRef.current = true;
       const newIndex = historyIndexRef.current - 1;
@@ -275,7 +478,63 @@ export function WorkflowBuilder({
       setHistoryIndex(newIndex);
       setSelectedNode(null); // Clear selection when undoing
     }
-  }, [history]);
+  }, [history, isReadOnly]);
+
+  const handleNodesChange = useCallback((updater: SetStateAction<WorkflowNode[]>) => {
+    if (isReadOnly) return;
+    setNodes(updater);
+  }, [isReadOnly]);
+
+  const handleEdgesChange = useCallback((updater: SetStateAction<WorkflowEdge[]>) => {
+    if (isReadOnly) return;
+    setEdges(updater);
+  }, [isReadOnly]);
+
+  const ensureShareLink = useCallback(async () => {
+    if (shareLinkId && shareToken) {
+      return { shareableLinkId: shareLinkId, token: shareToken };
+    }
+    if (!workflowId) {
+      throw new Error('Save workflow before sharing');
+    }
+    const { apiClient } = await import('@/lib/api/client');
+    const res = await apiClient.createShareLink(workflowId, 'editor');
+    if (!res.success || !res.data?.shareableLinkId || !res.data?.token) {
+      throw new Error(res.error?.message || 'Failed to create share link');
+    }
+    setShareLinkId(res.data.shareableLinkId);
+    setShareToken(res.data.token);
+    return { shareableLinkId: res.data.shareableLinkId, token: res.data.token };
+  }, [shareLinkId, shareToken, workflowId]);
+
+  const buildShareUrl = useCallback((linkId: string, token: string) => {
+    const appBase = import.meta.env.VITE_APP_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173');
+    return `${appBase}/workflow/share/${linkId}?token=${encodeURIComponent(token)}`;
+  }, []);
+
+  const handleShare = useCallback(async () => {
+    try {
+      setShareBusy(true);
+      setShareStatus(null);
+      const { shareableLinkId, token } = await ensureShareLink();
+      const url = buildShareUrl(shareableLinkId, token);
+
+      if (navigator.share && typeof navigator.share === 'function') {
+        await navigator.share({ title: workflowName, url });
+        setShareStatus('Link shared');
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        setShareStatus('Link copied to clipboard');
+      } else {
+        setShareStatus(url);
+        alert(url);
+      }
+    } catch (error: any) {
+      setShareStatus(error?.message || 'Unable to share link');
+    } finally {
+      setShareBusy(false);
+    }
+  }, [ensureShareLink, buildShareUrl, workflowName]);
 
   const handleSave = useCallback(async () => {
     if (onSave && tabId) {
@@ -669,11 +928,35 @@ export function WorkflowBuilder({
             selectedNodeData ? 'right-[340px]' : 'right-4'
           }`}
         >
+          <div className="flex items-center gap-2 mr-2">
+            <Badge variant={collabStatus === 'connected' ? 'default' : 'secondary'} className="text-[11px]">
+              {collabStatus === 'connected' ? 'Live' : collabStatus === 'connecting' ? 'Connecting…' : 'Offline'}
+            </Badge>
+            <Badge variant={isReadOnly ? 'secondary' : 'outline'} className="text-[11px]">
+              {isReadOnly ? 'Read-only' : 'Editor'}
+            </Badge>
+            {collabError && (
+              <span className="text-[11px] text-destructive">{collabError}</span>
+            )}
+            {shareStatus && !shareStatus.toLowerCase().includes('unable') && (
+              <span className="text-[11px] text-muted-foreground">{shareStatus}</span>
+            )}
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleShare}
+            disabled={shareBusy || !workflowId}
+            className="bg-card/90 backdrop-blur-sm border-border/50 shadow-lg hover:bg-card"
+          >
+            <Share2 className="w-4 h-4 mr-2" />
+            Share
+          </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={handleSave}
-            disabled={isExecuting}
+            disabled={isExecuting || isReadOnly}
             className="bg-card/90 backdrop-blur-sm border-border/50 shadow-lg hover:bg-card"
           >
             <Save className="w-4 h-4 mr-2" />
@@ -683,7 +966,7 @@ export function WorkflowBuilder({
             variant="default"
             size="sm"
             onClick={handleExecute}
-            disabled={isExecuting || nodes.length === 0}
+            disabled={isExecuting || nodes.length === 0 || isReadOnly}
             className="bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg backdrop-blur-sm"
           >
             <Play className="w-4 h-4 mr-2" />
@@ -698,14 +981,15 @@ export function WorkflowBuilder({
             <WorkflowCanvas
               nodes={nodes}
               edges={edges}
-              onNodesChange={setNodes}
-              onEdgesChange={setEdges}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
               onNodeSelect={handleNodeSelect}
               onNodeDelete={handleDeleteNode}
               onAddNode={handleAddNode}
               selectedNodeId={selectedNode}
               executionStatus={executionStatus}
               isExecuting={isExecuting}
+              isReadOnly={isReadOnly}
               onNodeDragStart={setDraggedNodeId}
               onNodeDragStop={() => {
                 setDraggedNodeId(null);

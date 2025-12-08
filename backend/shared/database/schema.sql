@@ -43,6 +43,20 @@ CREATE TABLE IF NOT EXISTS workflows (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- Shareable links for collaborative workflows
+CREATE TABLE IF NOT EXISTS shareable_links (
+    shareable_link_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workflow_id UUID NOT NULL REFERENCES workflows(workflow_id) ON DELETE CASCADE,
+    access_token TEXT NOT NULL,
+    permission TEXT NOT NULL CHECK (permission IN ('read', 'editor')),
+    created_by UUID REFERENCES users(user_id) ON DELETE SET NULL,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (access_token),
+    UNIQUE (workflow_id, permission, access_token)
+);
+
 -- Processing Jobs table (Job Orchestration)
 CREATE TABLE IF NOT EXISTS processing_jobs (
     job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -65,6 +79,9 @@ CREATE INDEX IF NOT EXISTS idx_mcp_tools_developer ON mcp_tools(developer_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_status ON mcp_tools(status);
 CREATE INDEX IF NOT EXISTS idx_workflows_user ON workflows(user_id);
 CREATE INDEX IF NOT EXISTS idx_workflows_created ON workflows(created_at);
+CREATE INDEX IF NOT EXISTS idx_shareable_links_workflow ON shareable_links(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_shareable_links_permission ON shareable_links(permission);
+CREATE INDEX IF NOT EXISTS idx_shareable_links_expires_at ON shareable_links(expires_at);
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_user ON processing_jobs(user_id);
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_status ON processing_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_created ON processing_jobs(created_at);
@@ -74,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_processing_jobs_created ON processing_jobs(create
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 DROP TRIGGER IF EXISTS update_mcp_tools_updated_at ON mcp_tools;
 DROP TRIGGER IF EXISTS update_workflows_updated_at ON workflows;
+DROP TRIGGER IF EXISTS update_shareable_links_updated_at ON shareable_links;
 DROP TRIGGER IF EXISTS update_processing_jobs_updated_at ON processing_jobs;
 DROP FUNCTION IF EXISTS update_updated_at_column();
 
@@ -95,6 +113,10 @@ CREATE TRIGGER update_mcp_tools_updated_at BEFORE UPDATE ON mcp_tools
 
 DROP TRIGGER IF EXISTS update_workflows_updated_at ON workflows;
 CREATE TRIGGER update_workflows_updated_at BEFORE UPDATE ON workflows
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_shareable_links_updated_at ON shareable_links;
+CREATE TRIGGER update_shareable_links_updated_at BEFORE UPDATE ON shareable_links
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_processing_jobs_updated_at ON processing_jobs;

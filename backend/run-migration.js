@@ -72,6 +72,23 @@ async function runMigration() {
         console.log('   ⚠️  Guest migration error (may already be applied):', error.message);
       }
     }
+
+    // Shareable links migration
+    try {
+      const shareableLinksPath = join(__dirname, 'shared', 'database', 'migrations', 'add-shareable-links.sql');
+      const shareableLinksMigration = readFileSync(shareableLinksPath, 'utf-8');
+      console.log('   Running shareable links migration...');
+      await pool.query(shareableLinksMigration);
+      console.log('   ✅ Shareable links migration completed');
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        console.log('   ⚠️  Shareable links migration file not found (skipping)');
+      } else if (error.code === '42710' || error.message?.includes('already exists')) {
+        console.log('   ℹ️  Shareable links already exist (skipping)');
+      } else {
+        console.log('   ⚠️  Shareable links migration error (may already be applied):', error.message);
+      }
+    }
     
     // Verify tables were created
     console.log('\n📋 Verifying tables...');

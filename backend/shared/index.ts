@@ -2,6 +2,7 @@
 export * from './config';
 export * from './database/connection';
 export * from './database/models/user';
+export * from './database/models/shareable-link';
 export * from './database/models/user-api-key';
 export * from './auth/encryption';
 export * from './database/models/mcp-tool';

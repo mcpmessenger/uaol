@@ -23,6 +23,10 @@
       "types": "./dist/database/models/user.d.ts",
       "default": "./dist/database/models/user.js"
     },
+    "./database/models/shareable-link": {
+      "types": "./dist/database/models/shareable-link.d.ts",
+      "default": "./dist/database/models/shareable-link.js"
+    },
     "./database/models/user-api-key": {
       "types": "./dist/database/models/user-api-key.d.ts",
       "default": "./dist/database/models/user-api-key.js"

@@ -8,6 +8,8 @@ export interface Workflow {
   name: string;
   description: string | null;
   workflow_definition: WorkflowDefinition;
+  shareable_link_id: string | null;
+  collaboration_permissions: any;
   created_at: Date;
   updated_at: Date;
 }
@@ -19,14 +21,29 @@ export class WorkflowModel {
     userId: string,
     name: string,
     description: string | null,
-    workflowDefinition: WorkflowDefinition
+    workflowDefinition: WorkflowDefinition,
+    collaborationPermissions: any = []
   ): Promise<Workflow> {
     const workflowId = randomUUID();
     const result = await this.pool.query(
-      `INSERT INTO workflows (workflow_id, user_id, name, description, workflow_definition)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO workflows (
+         workflow_id,
+         user_id,
+         name,
+         description,
+         workflow_definition,
+         collaboration_permissions
+       )
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [workflowId, userId, name, description, JSON.stringify(workflowDefinition)]
+      [
+        workflowId,
+        userId,
+        name,
+        description,
+        JSON.stringify(workflowDefinition),
+        JSON.stringify(collaborationPermissions),
+      ]
     );
 
     return this.mapRowToWorkflow(result.rows[0]);
@@ -55,6 +72,19 @@ export class WorkflowModel {
     );
 
     return result.rows.map(row => this.mapRowToWorkflow(row));
+  }
+
+  async findByShareableLinkId(shareableLinkId: string): Promise<Workflow | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM workflows WHERE shareable_link_id = $1',
+      [shareableLinkId]
+    );
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    return this.mapRowToWorkflow(result.rows[0]);
   }
 
   async update(
@@ -127,6 +157,8 @@ export class WorkflowModel {
       name: row.name,
       description: row.description,
       workflow_definition: row.workflow_definition,
+      shareable_link_id: row.shareable_link_id,
+      collaboration_permissions: row.collaboration_permissions,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };

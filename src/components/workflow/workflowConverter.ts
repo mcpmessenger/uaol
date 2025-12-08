@@ -4,7 +4,7 @@
 
 import { WorkflowNode, WorkflowEdge, WorkflowDefinition } from './WorkflowBuilder';
 
-interface BackendWorkflowStep {
+export interface BackendWorkflowStep {
   id: string;
   tool_id?: string;
   action: string;
@@ -13,7 +13,7 @@ interface BackendWorkflowStep {
   node_type?: string;
 }
 
-interface BackendWorkflowDefinition {
+export interface BackendWorkflowDefinition {
   steps: BackendWorkflowStep[];
   metadata?: Record<string, any>;
 }
@@ -138,4 +138,68 @@ export function convertFromBackendFormat(
     nodes,
     edges,
   };
+}
+
+/**
+ * Converts frontend workflow format (nodes/edges) to backend format (steps)
+ */
+export function convertToBackendFormat(
+  nodes: WorkflowNode[],
+  edges: WorkflowEdge[],
+  workflowName?: string
+): BackendWorkflowDefinition {
+  const steps: BackendWorkflowStep[] = nodes
+    .filter((n) => n.type !== 'start' && n.type !== 'end')
+    .map((node) => {
+      const step: BackendWorkflowStep = {
+        id: node.id,
+        action: getActionForNodeType(node.type, node.data),
+        parameters: { ...node.data },
+      };
+
+      // Preserve MCP tool metadata
+      if (node.type === 'mcp-tool') {
+        if (node.data.tool_id) {
+          step.tool_id = node.data.tool_id;
+        }
+        step.node_type = node.type;
+      } else {
+        // Store node type for backend resolution of built-ins
+        step.node_type = node.type;
+      }
+
+      const incomingEdges = edges.filter((e) => e.target === node.id);
+      if (incomingEdges.length > 0) {
+        step.depends_on = incomingEdges.map((e) => e.source);
+      }
+
+      return step;
+    });
+
+  return {
+    steps,
+    metadata: {
+      name: workflowName || 'Workflow',
+      createdBy: 'workflow-builder',
+    },
+  };
+}
+
+function getActionForNodeType(type: WorkflowNode['type'], nodeData?: any): string {
+  if (type === 'mcp-tool' && nodeData?.method) {
+    return nodeData.method;
+  }
+
+  const actionMap: Record<WorkflowNode['type'], string> = {
+    start: '',
+    'file-upload': 'upload',
+    'text-extraction': 'extract',
+    'rag-indexing': 'index',
+    'rag-query': 'query',
+    'ai-generation': 'generate',
+    'mcp-tool': '',
+    end: '',
+  };
+
+  return actionMap[type] || '';
 }

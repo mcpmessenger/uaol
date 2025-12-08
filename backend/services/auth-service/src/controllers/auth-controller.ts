@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { getDatabasePool } from '@uaol/shared/database/connection';
 import { UserModel } from '@uaol/shared/database/models/user';
+import { ShareableLinkModel } from '@uaol/shared/database/models/shareable-link';
+import { WorkflowModel } from '@uaol/shared/database/models/workflow';
 import { generateToken, verifyToken, extractTokenFromHeader } from '@uaol/shared/auth/jwt';
 import { createLogger } from '@uaol/shared/logger';
 import { AuthenticationError, ValidationError } from '@uaol/shared/errors';
@@ -17,6 +19,8 @@ import {
 
 const logger = createLogger('auth-service');
 const userModel = new UserModel(getDatabasePool());
+const shareableLinkModel = new ShareableLinkModel(getDatabasePool());
+const workflowModel = new WorkflowModel(getDatabasePool());
 
 // Helper function to get OAuth config - prioritizes process.env directly since we know those values are set
 function getGoogleOAuthConfig() {
@@ -535,6 +539,39 @@ export const authController = {
         success: true,
         data: {
           apiKey: user.api_key,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async validateShareLink(req: Request, res: Response, next: NextFunction) {
+    try {
+      const shareableLinkId = (req.body?.shareableLinkId || req.query?.shareableLinkId) as string | undefined;
+      const token = (req.body?.token || req.query?.token) as string | undefined;
+
+      if (!shareableLinkId || !token) {
+        throw new ValidationError('shareableLinkId and token are required');
+      }
+
+      const link = await shareableLinkModel.validateAccess(shareableLinkId, token);
+      if (!link) {
+        throw new AuthenticationError('Invalid or expired share link');
+      }
+
+      const workflow = await workflowModel.findById(link.workflow_id);
+      if (!workflow) {
+        throw new AuthenticationError('Workflow not found for share link');
+      }
+
+      res.json({
+        success: true,
+        data: {
+          shareableLinkId: link.shareable_link_id,
+          workflowId: link.workflow_id,
+          permission: link.permission,
+          expiresAt: link.expires_at,
         },
       });
     } catch (error) {
