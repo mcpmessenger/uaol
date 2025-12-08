@@ -236,6 +236,11 @@ class JobProcessor {
 
     logger.info('Executing workflow', { stepCount: workflow.steps?.length || 0 });
 
+    // Treat "start" as a virtual step that is always satisfied so downstream
+    // nodes with depends_on: ["start"] do not fail dependency checks.
+    const START_STEP_ID = 'start';
+    stepResults.set(START_STEP_ID, { ok: true, virtual: true });
+
     // Execute steps in order (respecting dependencies)
     for (const step of workflow.steps || []) {
       logger.debug('Executing step', { 
@@ -248,6 +253,10 @@ class JobProcessor {
       // Check dependencies
       if (step.depends_on && step.depends_on.length > 0) {
         for (const depId of step.depends_on) {
+          // Skip the virtual start node; it is always considered satisfied
+          if (depId === START_STEP_ID) {
+            continue;
+          }
           if (!stepResults.has(depId)) {
             throw new Error(`Dependency ${depId} not found for step ${step.id}. Ensure all dependencies execute before this step.`);
           }
