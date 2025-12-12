@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { X, Plus, FileText } from 'lucide-react';
+import { X, Plus, FileText, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { WorkflowDefinition } from './WorkflowBuilder';
 
@@ -19,6 +19,7 @@ interface WorkflowTab {
 interface WorkflowTabsProps {
   onTabChange: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
+  onTabDelete?: (tabId: string, workflowId?: string) => void;
   onWorkflowUpdate: (tabId: string, workflow: WorkflowDefinition, name: string) => void;
   onTabRename?: (tabId: string, newName: string) => void;
   activeTabId: string;
@@ -29,6 +30,7 @@ interface WorkflowTabsProps {
 export function WorkflowTabs({
   onTabChange,
   onTabClose,
+  onTabDelete,
   onWorkflowUpdate,
   onTabRename,
   activeTabId,
@@ -139,15 +141,33 @@ export function WorkflowTabs({
           {tab.isDirty && (
             <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
           )}
-          <button
-            onClick={(e) => handleTabCloseClick(e, tab.id)}
-            className={cn(
-              'ml-1 p-0.5 rounded hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0',
-              activeTabId === tab.id && 'opacity-100'
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {tab.workflowId && onTabDelete && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTabDelete(tab.id, tab.workflowId);
+                }}
+                className={cn(
+                  'p-0.5 rounded hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity',
+                  activeTabId === tab.id && 'opacity-100'
+                )}
+                title="Delete workflow"
+              >
+                <Trash2 className="w-3 h-3 text-destructive" />
+              </button>
             )}
-          >
-            <X className="w-3 h-3" />
-          </button>
+            <button
+              onClick={(e) => handleTabCloseClick(e, tab.id)}
+              className={cn(
+                'p-0.5 rounded hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity',
+                activeTabId === tab.id && 'opacity-100'
+              )}
+              title="Close tab"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
         </div>
       ))}
       <Button

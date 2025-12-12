@@ -13,6 +13,8 @@ import {
   ChevronDown,
   Plug,
   Loader2,
+  GitBranch,
+  Repeat,
 } from 'lucide-react';
 import { WorkflowNode } from './WorkflowBuilder';
 import { apiClient } from '@/lib/api/client';
@@ -66,6 +68,18 @@ const nodeTypes: Array<{ type: WorkflowNode['type']; label: string; icon: any; d
     label: 'AI Generation',
     icon: Sparkles,
     description: 'Generate content with AI',
+  },
+  {
+    type: 'condition',
+    label: 'Conditional (if/else)',
+    icon: GitBranch,
+    description: 'Evaluate a boolean and route later steps',
+  },
+  {
+    type: 'loop',
+    label: 'Loop (for-each)',
+    icon: Repeat,
+    description: 'Iterate over a list and pass items forward',
   },
 ];
 

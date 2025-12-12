@@ -7,17 +7,17 @@ A comprehensive microservices platform for orchestrating AI workflows, managing 
 - **Microservices Architecture**: Decoupled, scalable backend services
 - **AI Chat Interface**: Interactive chat with OpenAI integration
 - **Workflow Orchestration**: Execute complex multi-step AI workflows
+- **Shared Workflow Builder**: Build and run workflows collaboratively (alpha)
 - **MCP Tool Management**: Register and manage Model Context Protocol tools
 - **Credit System**: Built-in billing and credit management
 - **Modern Frontend**: React + TypeScript + Tailwind CSS UI
 
-## ✅ PDF Parsing Issue - RESOLVED
+## ✅ Current Status
 
-The **critical PDF parsing issue** that blocked document analysis has been **successfully resolved**! See [`doc/PDF_PARSING_BUG_BOUNTY.md`](doc/PDF_PARSING_BUG_BOUNTY.md) for details.
-
-**Status**: ✅ **RESOLVED** - PDF summaries are working!  
-**Resolution Date**: 2025-12-06  
-**Impact**: PDF text extraction and document analysis are now fully functional
+- **Workflow Builder**: Shared workflow builder is active (collaboration UI present; connection errors may appear if the collaboration service is not running). Document Analysis & RAG workflow now completes end-to-end with async indexing.
+- **Job Processing**: Job orchestration service processes queued jobs with a virtual `start` dependency fix to prevent hangs.
+- **Message Queue**: Supports SQS (set `MQ_TYPE=sqs`, `SQS_QUEUE_URL`, `SQS_REGION`) and Kafka (default). Ensure the chosen broker is running.
+- **PDF Parsing**: Critical PDF parsing issue resolved; PDF text extraction is functional. See [`doc/PDF_PARSING_BUG_BOUNTY.md`](doc/PDF_PARSING_BUG_BOUNTY.md).
 
 ## 📋 Prerequisites
 

@@ -11,6 +11,8 @@ export interface BackendWorkflowStep {
   parameters: Record<string, any>;
   depends_on?: string[];
   node_type?: string;
+  condition_label?: 'true' | 'false'; // Which condition branch this step is on
+  loop_body?: boolean; // Whether this step is part of a loop body
 }
 
 export interface BackendWorkflowDefinition {
@@ -60,6 +62,8 @@ export function convertFromBackendFormat(
         'index': 'rag-indexing',
         'query': 'rag-query',
         'generate': 'ai-generation',
+        'condition': 'condition',
+        'loop': 'loop',
       };
       nodeType = actionToType[step.action] || 'ai-generation';
     }
@@ -171,6 +175,18 @@ export function convertToBackendFormat(
       const incomingEdges = edges.filter((e) => e.target === node.id);
       if (incomingEdges.length > 0) {
         step.depends_on = incomingEdges.map((e) => e.source);
+        
+        // Check if this step is on a condition branch
+        const conditionEdge = incomingEdges.find(e => e.conditionLabel);
+        if (conditionEdge) {
+          step.condition_label = conditionEdge.conditionLabel;
+        }
+        
+        // Check if this step is part of a loop body
+        const loopBodyEdge = incomingEdges.find(e => e.loopBody);
+        if (loopBodyEdge) {
+          step.loop_body = true;
+        }
       }
 
       return step;
@@ -198,6 +214,8 @@ function getActionForNodeType(type: WorkflowNode['type'], nodeData?: any): strin
     'rag-query': 'query',
     'ai-generation': 'generate',
     'mcp-tool': '',
+    'condition': 'condition',
+    'loop': 'loop',
     end: '',
   };
 

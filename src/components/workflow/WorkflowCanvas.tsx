@@ -69,22 +69,41 @@ export function WorkflowCanvas({
 
   // Convert our WorkflowEdge format to ReactFlow Edge format
   const reactFlowEdges: Edge[] = useMemo(() => {
-    return edges.map(edge => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.sourceHandle,
-      targetHandle: edge.targetHandle,
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-      },
-      style: {
-        stroke: getEdgeColor(edge.source, edge.target, executionStatus),
-        strokeWidth: 2,
-      },
-      animated: isExecuting && executionStatus[edge.source] === 'running',
-    }));
-  }, [edges, executionStatus, isExecuting]);
+    return edges.map(edge => {
+      const sourceNode = nodes.find(n => n.id === edge.source);
+      const isConditionEdge = sourceNode?.type === 'condition';
+      const isLoopEdge = sourceNode?.type === 'loop';
+      
+      // Determine edge color based on condition label or loop body
+      let edgeColor = getEdgeColor(edge.source, edge.target, executionStatus);
+      if (isConditionEdge && edge.conditionLabel === 'true') {
+        edgeColor = '#10b981'; // green
+      } else if (isConditionEdge && edge.conditionLabel === 'false') {
+        edgeColor = '#ef4444'; // red
+      } else if (isLoopEdge && edge.loopBody) {
+        edgeColor = '#14b8a6'; // teal
+      }
+      
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: edge.sourceHandle || (isConditionEdge ? edge.conditionLabel : isLoopEdge ? (edge.loopBody ? 'body' : 'exit') : undefined),
+        targetHandle: edge.targetHandle,
+        label: isConditionEdge ? (edge.conditionLabel === 'true' ? 'True' : edge.conditionLabel === 'false' ? 'False' : undefined) : isLoopEdge && edge.loopBody ? 'Loop' : undefined,
+        labelStyle: { fontSize: 12, fontWeight: 600 },
+        labelBgStyle: { fill: 'var(--background)', fillOpacity: 0.8 },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+        },
+        style: {
+          stroke: edgeColor,
+          strokeWidth: 2,
+        },
+        animated: isExecuting && executionStatus[edge.source] === 'running',
+      };
+    });
+  }, [edges, nodes, executionStatus, isExecuting]);
 
   const [reactFlowNodesState, setReactFlowNodesState, onNodesChangeInternal] = useNodesState(reactFlowNodes);
   const [reactFlowEdgesState, setReactFlowEdgesState, onEdgesChangeInternal] = useEdgesState(reactFlowEdges);
@@ -119,28 +138,44 @@ export function WorkflowCanvas({
     if (isReadOnly) return;
     onEdgesChangeInternal(changes);
     // Convert back to our format and notify parent
-    const updatedEdges = reactFlowEdgesState.map(edge => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.sourceHandle,
-      targetHandle: edge.targetHandle,
-    }));
+    const updatedEdges = reactFlowEdgesState.map(edge => {
+      const sourceNode = nodes.find(n => n.id === edge.source);
+      const isCondition = sourceNode?.type === 'condition';
+      const isLoop = sourceNode?.type === 'loop';
+      
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: edge.sourceHandle,
+        targetHandle: edge.targetHandle,
+        conditionLabel: isCondition && edge.sourceHandle === 'true' ? 'true' : isCondition && edge.sourceHandle === 'false' ? 'false' : undefined,
+        loopBody: isLoop && edge.sourceHandle === 'body',
+      };
+    });
     onEdgesChange(updatedEdges);
   }, [onEdgesChangeInternal, reactFlowEdgesState, onEdgesChange, isReadOnly]);
 
   const onConnect = useCallback(
     (params: Connection) => {
+      const sourceNode = nodes.find(n => n.id === params.source);
+      const isCondition = sourceNode?.type === 'condition';
+      const isLoop = sourceNode?.type === 'loop';
+      
       const newEdge: WorkflowEdge = {
         id: `edge-${Date.now()}`,
         source: params.source || '',
         target: params.target || '',
         sourceHandle: params.sourceHandle,
         targetHandle: params.targetHandle,
+        // Auto-detect condition label from handle ID
+        conditionLabel: isCondition && params.sourceHandle === 'true' ? 'true' : isCondition && params.sourceHandle === 'false' ? 'false' : undefined,
+        // Auto-detect loop body from handle ID
+        loopBody: isLoop && params.sourceHandle === 'body',
       };
       onEdgesChange([...edges, newEdge]);
     },
-    [edges, onEdgesChange]
+    [edges, nodes, onEdgesChange]
   );
 
   const onNodeClick = useCallback(

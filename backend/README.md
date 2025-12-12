@@ -44,6 +44,14 @@ Microservices backend for the Universal AI Orchestration Layer.
 ## Scripts
 
 - `npm run dev` - Start all services in development mode
+- `npm run dev:api-gateway` - Run only the API Gateway
+- `npm run dev:auth-service` - Run only the Auth Service
+- `npm run dev:tool-registry` - Run only the Tool Registry Service
+- `npm run dev:job-orch` - Run only the Job Orchestration Service
+- `npm run dev:tool-proxy` - Run only the Tool Proxy Service
+- `npm run dev:billing-service` - Run only the Billing Service
+- `npm run dev:storage-service` - Run only the Storage Service
+- `npm run dev:collaboration-service` - Run only the Collaboration Service
 - `npm run build` - Build all services
 - `npm run migrate` - Run database migrations
 - `npm test` - Run tests
