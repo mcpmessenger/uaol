@@ -10,7 +10,9 @@ import {
   Play, 
   CheckCircle2, 
   XCircle, 
-  Loader2 
+  Loader2,
+  GitBranch,
+  Repeat,
 } from 'lucide-react';
 
 interface CustomNodeData {
@@ -30,6 +32,8 @@ const nodeIcons: Record<string, any> = {
   'rag-indexing': Database,
   'rag-query': Search,
   'ai-generation': Sparkles,
+  'condition': GitBranch,
+  'loop': Repeat,
   'end': CheckCircle2,
 };
 
@@ -40,6 +44,8 @@ const nodeColors: Record<string, string> = {
   'rag-indexing': 'bg-orange-500/20 border-orange-500/50 text-orange-400',
   'rag-query': 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400',
   'ai-generation': 'bg-pink-500/20 border-pink-500/50 text-pink-400',
+  'condition': 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400',
+  'loop': 'bg-teal-500/20 border-teal-500/50 text-teal-400',
   'end': 'bg-gray-500/20 border-gray-500/50 text-gray-400',
 };
 
@@ -96,13 +102,67 @@ export const WorkflowNodeComponent = memo(({ data, selected }: NodeProps<CustomN
         </div>
       </div>
 
-      {/* Output Handle */}
+      {/* Output Handles */}
       {data.nodeType !== 'end' && (
-        <Handle
-          type="source"
-          position={Position.Right}
-          className="w-3 h-3 bg-primary border-2 border-background"
-        />
+        <>
+          {data.nodeType === 'condition' ? (
+            <>
+              {/* True branch handle (top) */}
+              <Handle
+                type="source"
+                position={Position.Right}
+                id="true"
+                className="w-3 h-3 bg-green-500 border-2 border-background"
+                style={{ top: '30%' }}
+              />
+              <div className="absolute right-[-40px] top-[25%] text-[10px] font-semibold text-green-500 pointer-events-none">
+                True
+              </div>
+              {/* False branch handle (bottom) */}
+              <Handle
+                type="source"
+                position={Position.Right}
+                id="false"
+                className="w-3 h-3 bg-red-500 border-2 border-background"
+                style={{ top: '70%' }}
+              />
+              <div className="absolute right-[-40px] top-[65%] text-[10px] font-semibold text-red-500 pointer-events-none">
+                False
+              </div>
+            </>
+          ) : data.nodeType === 'loop' ? (
+            <>
+              {/* Loop body handle (top) */}
+              <Handle
+                type="source"
+                position={Position.Right}
+                id="body"
+                className="w-3 h-3 bg-teal-500 border-2 border-background"
+                style={{ top: '30%' }}
+              />
+              <div className="absolute right-[-50px] top-[25%] text-[10px] font-semibold text-teal-500 pointer-events-none">
+                Body
+              </div>
+              {/* Loop exit handle (bottom) */}
+              <Handle
+                type="source"
+                position={Position.Right}
+                id="exit"
+                className="w-3 h-3 bg-gray-500 border-2 border-background"
+                style={{ top: '70%' }}
+              />
+              <div className="absolute right-[-40px] top-[65%] text-[10px] font-semibold text-gray-500 pointer-events-none">
+                Exit
+              </div>
+            </>
+          ) : (
+            <Handle
+              type="source"
+              position={Position.Right}
+              className="w-3 h-3 bg-primary border-2 border-background"
+            />
+          )}
+        </>
       )}
     </div>
   );

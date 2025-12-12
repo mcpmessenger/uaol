@@ -5,6 +5,7 @@ import { UserModel } from '@uaol/shared/database/models/user';
 import { createLogger } from '@uaol/shared/logger';
 import { ValidationError, NotFoundError } from '@uaol/shared/errors';
 import { extractTokenFromHeader, verifyToken } from '@uaol/shared/auth/jwt';
+import { MCPClient } from '@uaol/shared/mcp/client';
 
 const logger = createLogger('tool-registry-service');
 const toolModel = new MCPToolModel(getDatabasePool());
@@ -16,6 +17,41 @@ function getUserModel(): UserModel {
     userModel = new UserModel(getDatabasePool());
   }
   return userModel;
+}
+
+function normalizeGatewayUrl(url: string): string {
+  return url.trim().replace(/\/$/, '');
+}
+
+async function validateMcpManifest(gatewayUrl: string, protocol: 'json-rpc' | 'rest') {
+  const client = new MCPClient(gatewayUrl, protocol);
+
+  let tools: any[];
+  try {
+    tools = await client.listTools();
+  } catch (error: any) {
+    logger.warn('Failed to fetch MCP manifest', { gatewayUrl, protocol, error: error?.message });
+    throw new ValidationError(`Failed to fetch MCP manifest from ${gatewayUrl}: ${error?.message || 'Unknown error'}`);
+  }
+
+  if (!Array.isArray(tools) || tools.length === 0) {
+    throw new ValidationError('MCP manifest must include at least one tool');
+  }
+
+  const invalidTool = tools.find(t => !t?.name || typeof t.name !== 'string');
+  if (invalidTool) {
+    throw new ValidationError('Each MCP tool must include a string "name" field');
+  }
+
+  const invalidSchema = tools.find(t => t.inputSchema !== undefined && typeof t.inputSchema !== 'object');
+  if (invalidSchema) {
+    throw new ValidationError('MCP tool inputSchema must be an object when provided');
+  }
+
+  return {
+    toolNames: tools.map(t => t.name),
+    toolCount: tools.length,
+  };
 }
 
 export const toolController = {
@@ -75,6 +111,12 @@ export const toolController = {
         throw new ValidationError('Protocol must be either "json-rpc" or "rest"');
       }
 
+      const normalizedGatewayUrl = normalizeGatewayUrl(gateway_url);
+      const protocolValue = (protocol === 'rest' ? 'rest' : 'json-rpc') as 'json-rpc' | 'rest';
+
+      const manifestInfo = await validateMcpManifest(normalizedGatewayUrl, protocolValue);
+      logger.info('MCP manifest validated', { gatewayUrl: normalizedGatewayUrl, ...manifestInfo });
+
       // Try to get developer ID from authenticated user first
       let developerId = user?.user_id;
       
@@ -122,16 +164,19 @@ export const toolController = {
 
       const tool = await toolModel.create(
         name,
-        gateway_url,
+        normalizedGatewayUrl,
         credit_cost_per_call || 1,
         developerId,
-        protocol || 'json-rpc' // Default to json-rpc if not specified
+        protocolValue // Default to json-rpc if not specified
       );
 
       logger.info('Tool created successfully', { toolId: tool.tool_id });
       res.status(201).json({
         success: true,
-        data: tool,
+        data: {
+          ...tool,
+          manifest: manifestInfo,
+        },
       });
     } catch (error) {
       next(error);

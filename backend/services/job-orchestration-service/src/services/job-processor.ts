@@ -5,6 +5,7 @@ import { createLogger } from '@uaol/shared/logger';
 import { createConsumer } from '@uaol/shared/mq/queue';
 import { MCPClient } from '@uaol/shared/mcp/client';
 import { config } from '@uaol/shared/config';
+import { indexDocumentChunks, queryVectorStore, DocumentChunk } from '@uaol/shared/vector-store/vector-store';
 
 const logger = createLogger('job-orchestration-service');
 
@@ -123,7 +124,7 @@ class JobProcessor {
       await model.updateStatus(jobId, JobStatus.RUNNING);
 
       // Execute workflow
-      const result = await this.executeWorkflow(job.workflow_definition);
+      const result = await this.executeWorkflow(job.workflow_definition, job.user_id);
 
       // Update job with result (this also sets status to SUCCESS)
       await model.updateOutput(jobId, result);
@@ -230,7 +231,7 @@ class JobProcessor {
     }
   }
 
-  private async executeWorkflow(workflow: any): Promise<Record<string, any>> {
+  private async executeWorkflow(workflow: any, userId: string): Promise<Record<string, any>> {
     const results: Record<string, any> = {};
     const stepResults: Map<string, any> = new Map();
 
@@ -268,6 +269,44 @@ class JobProcessor {
           stepId: step.id, 
           dependencyCount: dependencyResults.length 
         });
+      }
+
+      const dependencyOutputs = step.depends_on?.map(depId => stepResults.get(depId)) || [];
+
+      // Check condition label - only execute if condition result matches the label
+      if (step.condition_label) {
+        // Find the condition dependency
+        const conditionDepIndex = step.depends_on?.findIndex((depId, idx) => {
+          const depOutput = dependencyOutputs[idx];
+          return depOutput && typeof depOutput.result === 'boolean';
+        });
+        
+        if (conditionDepIndex !== undefined && conditionDepIndex >= 0) {
+          const conditionResult = dependencyOutputs[conditionDepIndex]?.result;
+          const expectedResult = step.condition_label === 'true';
+          
+          if (conditionResult !== expectedResult) {
+            const stepResult = { skipped: true, reason: `condition-${step.condition_label}-branch-not-taken` };
+            stepResults.set(step.id, stepResult);
+            results[step.id] = stepResult;
+            logger.debug('Skipping step - condition branch not taken', { 
+              stepId: step.id, 
+              conditionLabel: step.condition_label,
+              conditionResult 
+            });
+            continue;
+          }
+        }
+      } else {
+        // Legacy behavior: if a condition dependency evaluated to false and no label specified, skip
+        const hasBlockingCondition = dependencyOutputs.some(output => output && typeof output.result === 'boolean' && output.result === false);
+        if (hasBlockingCondition) {
+          const stepResult = { skipped: true, reason: 'condition-false' };
+          stepResults.set(step.id, stepResult);
+          results[step.id] = stepResult;
+          logger.debug('Skipping step due to false condition dependency (legacy)', { stepId: step.id });
+          continue;
+        }
       }
 
       // Handle built-in node types that don't require tool registration
@@ -341,36 +380,333 @@ class JobProcessor {
         continue;
       }
 
+      if (step.action === 'condition' || step.node_type === 'condition') {
+        logger.debug('Processing condition node', { stepId: step.id });
+
+        const params = step.parameters || {};
+        const leftRaw = params.leftOperand ?? '';
+        const rightRaw = params.rightOperand ?? '';
+        const operator = params.operator || 'equals';
+
+        const coerce = (val: any) => {
+          if (val === undefined || val === null) return '';
+          if (typeof val === 'number' || typeof val === 'boolean') return val;
+          return String(val);
+        };
+
+        const left = coerce(leftRaw);
+        const right = coerce(rightRaw);
+
+        let comparisonResult = true;
+        switch (operator) {
+          case 'not_equals':
+            comparisonResult = left !== right;
+            break;
+          case 'contains':
+            comparisonResult = String(left).includes(String(right));
+            break;
+          case 'gt':
+            comparisonResult = Number(left) > Number(right);
+            break;
+          case 'lt':
+            comparisonResult = Number(left) < Number(right);
+            break;
+          case 'gte':
+            comparisonResult = Number(left) >= Number(right);
+            break;
+          case 'lte':
+            comparisonResult = Number(left) <= Number(right);
+            break;
+          case 'equals':
+          default:
+            comparisonResult = left === right;
+            break;
+        }
+
+        const finalResult = params.conditionValue !== undefined ? !!params.conditionValue : comparisonResult;
+
+        const stepResult = {
+          result: finalResult,
+          left,
+          right,
+          operator,
+          comparisonResult,
+        };
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+        continue;
+      }
+
+      if (step.action === 'loop' || step.node_type === 'loop') {
+        logger.debug('Processing loop node', { stepId: step.id });
+        const params = step.parameters || {};
+        let items = params.items;
+
+        if (typeof items === 'string') {
+          try {
+            const parsed = JSON.parse(items);
+            items = parsed;
+          } catch (err: any) {
+            logger.warn('Loop items could not be parsed as JSON string, defaulting to empty array', {
+              stepId: step.id,
+              error: err?.message,
+            });
+            items = [];
+          }
+        }
+
+        if (!Array.isArray(items)) {
+          logger.warn('Loop items is not an array, defaulting to empty array', { stepId: step.id });
+          items = [];
+        }
+
+        const itemKey = params.itemKey || 'item';
+        const stepResult = {
+          items,
+          count: items.length,
+          itemKey,
+        };
+
+        stepResults.set(step.id, stepResult);
+        results[step.id] = stepResult;
+        continue;
+      }
+
+      // Loop body execution: if this step is marked as loop_body, find the loop dependency and execute per item
+      if (step.loop_body) {
+        const loopDep = dependencyOutputs.find((dep: any) => dep && Array.isArray(dep.items));
+        if (loopDep && Array.isArray(loopDep.items) && loopDep.items.length > 0) {
+          const itemKey = loopDep.itemKey || 'item';
+          const items = loopDep.items;
+          
+          logger.debug('Executing loop body step', { 
+            stepId: step.id, 
+            itemCount: items.length,
+            itemKey 
+          });
+          
+          // Execute this step for each item in the loop
+          const perItemResults: any[] = [];
+          
+          for (let loopIndex = 0; loopIndex < items.length; loopIndex++) {
+            const loopItem = items[loopIndex];
+            
+            // Merge loop context into step parameters
+            const loopParams = {
+              ...step.parameters,
+              [itemKey]: loopItem,
+              loopItem,
+              loopIndex,
+            };
+            
+            try {
+              // Execute the step with loop context
+              const itemResult = await this.executeStepWithLoopContext(step, loopParams, userId, workflow, stepResults, inputs);
+              perItemResults.push(itemResult);
+            } catch (itemError: any) {
+              logger.error('Loop body step execution failed for item', {
+                stepId: step.id,
+                loopIndex,
+                error: itemError.message,
+              });
+              perItemResults.push({ error: itemError.message, loopIndex });
+            }
+          }
+          
+          const stepResult = {
+            items: perItemResults,
+            count: perItemResults.length,
+            itemKey,
+            loopBody: true,
+          };
+          
+          stepResults.set(step.id, stepResult);
+          results[step.id] = stepResult;
+          continue;
+        } else {
+          // No loop items, skip loop body
+          logger.debug('Skipping loop body - no items', { stepId: step.id });
+          stepResults.set(step.id, { skipped: true, reason: 'loop-empty' });
+          results[step.id] = { skipped: true, reason: 'loop-empty' };
+          continue;
+        }
+      }
+      
+      // Legacy loop fan-out: if a dependency emits items (and step is not explicitly loop_body), run once per item
+      const loopDep = dependencyOutputs.find((dep: any) => dep && Array.isArray(dep.items));
+      if (loopDep && !step.loop_body) {
+        const itemKey = loopDep.itemKey || 'item';
+        const items: any[] = loopDep.items || [];
+        const perItemResults: Array<{ index: number; item: any; result: any }> = [];
+
+        // Preload tool if needed
+        let cachedTool: any = null;
+        if (step.tool_id) {
+          const toolModel = await getToolModel();
+          cachedTool = await toolModel.findById(step.tool_id);
+          if (!cachedTool) {
+            throw new Error(`Tool ${step.tool_id} not found for step ${step.id}. Please ensure the tool is registered.`);
+          }
+          if (cachedTool.status !== 'Approved') {
+            throw new Error(`Tool "${cachedTool.name}" (${step.tool_id}) is not approved (status: ${cachedTool.status}) for step ${step.id}`);
+          }
+        }
+
+        const runAiGeneration = async (mergedParams: any, deps: any[]) => {
+          const prompt = mergedParams?.prompt || '';
+          const model = mergedParams?.model || 'gpt-4o';
+          let context = '';
+          if (step.depends_on && step.depends_on.length > 0) {
+            const depResults = step.depends_on.map(depId => stepResults.get(depId));
+            context = depResults
+              .map(r => r?.text || r?.results?.join('\n') || '')
+              .filter(Boolean)
+              .join('\n\n');
+          }
+          return {
+            generated: `[AI Generation Placeholder]\nPrompt: ${prompt}\nModel: ${model}\nContext length: ${context.length} characters`,
+            model,
+            prompt,
+            contextLength: context.length,
+            loopContext: { item: mergedParams[itemKey], index: mergedParams.loopIndex },
+          };
+        };
+
+        const runToolCall = async (mergedParams: any) => {
+          const mcpClient = new MCPClient(cachedTool.gateway_url, cachedTool.protocol || 'json-rpc');
+          return mcpClient.callTool({
+            tool_id: cachedTool.tool_id,
+            name: step.action,
+            arguments: mergedParams,
+          });
+        };
+
+        for (let idx = 0; idx < items.length; idx++) {
+          const item = items[idx];
+          const mergedParams = {
+            ...step.parameters,
+            [itemKey]: item,
+            loopItem: item,
+            loopIndex: idx,
+          };
+
+          let perResult: any = { note: 'loop item skipped' };
+
+          if (step.action === 'generate' || step.node_type === 'ai-generation') {
+            perResult = await runAiGeneration(mergedParams, dependencyOutputs);
+          } else if (cachedTool) {
+            perResult = await runToolCall(mergedParams);
+          } else {
+            // Default: just pass through item for unsupported node types in loop context
+            perResult = { item, loopIndex: idx, parameters: mergedParams };
+          }
+
+          perItemResults.push({ index: idx, item, result: perResult });
+        }
+
+        const aggregated = {
+          items,
+          count: items.length,
+          itemKey,
+          results: perItemResults,
+        };
+
+        stepResults.set(step.id, aggregated);
+        results[step.id] = aggregated;
+        continue;
+      }
+
       if (step.action === 'index' || step.node_type === 'rag-indexing') {
-        // RAG indexing - placeholder implementation
         logger.debug('Processing rag-indexing node', { stepId: step.id });
-        
-        // Get text from previous step (text-extraction)
-        let text = '';
-        if (step.depends_on && step.depends_on.length > 0) {
-          const depResult = stepResults.get(step.depends_on[0]);
-          text = depResult?.text || '';
+
+        if (!userId) {
+          logger.warn('Skipping rag-indexing - missing userId');
+          continue;
         }
 
         const chunkSize = step.parameters?.chunkSize || 1000;
         const chunkOverlap = step.parameters?.chunkOverlap || 200;
-        
-        // Simple chunking (placeholder - real implementation would use vector store)
-        const chunks: string[] = [];
-        for (let i = 0; i < text.length; i += chunkSize - chunkOverlap) {
-          chunks.push(text.slice(i, i + chunkSize));
+
+        // Prefer file-scoped indexing when available
+        const dependencyResult = step.depends_on && step.depends_on.length > 0
+          ? stepResults.get(step.depends_on[0])
+          : null;
+        const sourceFiles = (dependencyResult?.files as any[]) || [];
+
+        let totalChunks = 0;
+        const indexedFiles: Array<{ fileId: string; filename?: string; chunkCount: number; length: number }> = [];
+
+        const chunkText = (text: string, fileId: string, filename?: string): DocumentChunk[] => {
+          const safeChunkSize = Math.max(chunkSize, 1);
+          const overlap = Math.min(chunkOverlap, safeChunkSize - 1);
+          const chunks: DocumentChunk[] = [];
+          for (let i = 0, idx = 0; i < text.length; i += safeChunkSize - overlap, idx++) {
+            chunks.push({
+              id: `${fileId}_chunk_${idx}`,
+              text: text.slice(i, i + safeChunkSize),
+              metadata: {
+                chunkIndex: idx,
+                filename,
+              },
+            });
+          }
+          return chunks;
+        };
+
+        const performIndex = async (fileId: string, text: string, filename?: string) => {
+          const chunks = chunkText(text, fileId, filename);
+          if (chunks.length === 0) {
+            logger.warn('No chunks generated for file', { fileId, stepId: step.id });
+            return;
+          }
+          try {
+            await indexDocumentChunks(fileId, userId, chunks);
+            indexedFiles.push({
+              fileId,
+              filename,
+              chunkCount: chunks.length,
+              length: text.length,
+            });
+            totalChunks += chunks.length;
+          } catch (err: any) {
+            logger.error('Indexing failed for file; continuing workflow', {
+              fileId,
+              stepId: step.id,
+              error: err.message,
+            });
+          }
+        };
+
+        if (Array.isArray(sourceFiles) && sourceFiles.length > 0) {
+          for (const file of sourceFiles) {
+            const text = file?.text || '';
+            const fileId = file?.fileId;
+            if (!fileId || !text) continue;
+            await performIndex(fileId, text, file?.filename);
+          }
+        } else {
+          // Fallback: index combined text if no file metadata is available
+          const text = dependencyResult?.text || '';
+          if (text) {
+            const fallbackFileId = step.parameters?.fileId || `workflow_${step.id}`;
+            await performIndex(fallbackFileId, text);
+          } else {
+            logger.warn('No text available for rag-indexing step', { stepId: step.id });
+          }
         }
 
         const stepResult = {
-          indexed: true,
-          chunkCount: chunks.length,
-          totalLength: text.length,
-          chunks: chunks.slice(0, 10), // Return first 10 chunks as sample
+          indexed: indexedFiles.length > 0,
+          chunkCount: totalChunks,
+          totalLength: indexedFiles.reduce((sum, f) => sum + f.length, 0),
+          files: indexedFiles,
         };
 
-        logger.debug('RAG indexing completed', { 
+        logger.debug('RAG indexing completed', {
           stepId: step.id,
-          chunkCount: chunks.length
+          indexedFiles: indexedFiles.length,
+          chunkCount: totalChunks,
         });
 
         stepResults.set(step.id, stepResult);
@@ -379,38 +715,36 @@ class JobProcessor {
       }
 
       if (step.action === 'query' || step.node_type === 'rag-query') {
-        // RAG query - placeholder implementation
         logger.debug('Processing rag-query node', { stepId: step.id });
-        
+
+        if (!userId) {
+          logger.warn('Skipping rag-query - missing userId');
+          continue;
+        }
+
         const query = step.parameters?.query || '';
         const topK = step.parameters?.topK || 5;
 
-        // Get indexed chunks from previous step
-        let chunks: string[] = [];
-        if (step.depends_on && step.depends_on.length > 0) {
+        // Determine which file to query, default to dependency result when available
+        let fileId = step.parameters?.fileId as string | undefined;
+        if (!fileId && step.depends_on && step.depends_on.length > 0) {
           const depResult = stepResults.get(step.depends_on[0]);
-          chunks = depResult?.chunks || [];
+          fileId = depResult?.files?.[0]?.fileId;
         }
 
-        // Simple text matching (placeholder - real implementation would use semantic search)
-        const results = chunks
-          .map((chunk, idx) => ({
-            chunk,
-            index: idx,
-            score: chunk.toLowerCase().includes(query.toLowerCase()) ? 0.8 : 0.1,
-          }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, topK);
+        const retrieved = await queryVectorStore(query, fileId, userId, topK);
 
         const stepResult = {
           query,
-          results: results.map(r => r.chunk),
-          count: results.length,
+          fileId,
+          results: retrieved,
+          count: retrieved.length,
         };
 
-        logger.debug('RAG query completed', { 
+        logger.debug('RAG query completed', {
           stepId: step.id,
-          resultCount: results.length
+          resultCount: retrieved.length,
+          fileId,
         });
 
         stepResults.set(step.id, stepResult);
@@ -545,6 +879,69 @@ class JobProcessor {
     });
 
     return results;
+  }
+
+  /**
+   * Execute a step with loop context (for loop body execution)
+   */
+  private async executeStepWithLoopContext(
+    step: any,
+    loopParams: any,
+    userId: string,
+    workflow: any,
+    stepResults: Map<string, any>,
+    inputs: any
+  ): Promise<any> {
+    // Handle different step types within loop context
+    if (step.action === 'generate' || step.node_type === 'ai-generation') {
+      const prompt = loopParams?.prompt || '';
+      const model = loopParams?.model || 'gpt-4o';
+      return {
+        generated: `[AI Generation Placeholder]\nPrompt: ${prompt}\nModel: ${model}\nLoop item: ${JSON.stringify(loopParams.loopItem)}`,
+        model,
+        prompt,
+        loopContext: { item: loopParams.loopItem, index: loopParams.loopIndex },
+      };
+    }
+
+    if (step.action === 'extract' || step.node_type === 'text-extraction') {
+      // Text extraction with loop context
+      return {
+        text: `[Extracted text for loop item ${loopParams.loopIndex}]`,
+        loopContext: { item: loopParams.loopItem, index: loopParams.loopIndex },
+      };
+    }
+
+    if (step.action === 'query' || step.node_type === 'rag-query') {
+      const query = loopParams?.query || '';
+      return {
+        query,
+        results: [],
+        loopContext: { item: loopParams.loopItem, index: loopParams.loopIndex },
+      };
+    }
+
+    // MCP tool call
+    if (step.tool_id) {
+      const toolModel = await getToolModel();
+      const tool = await toolModel.findById(step.tool_id);
+      if (!tool || tool.status !== 'Approved') {
+        throw new Error(`Tool ${step.tool_id} not found or not approved`);
+      }
+
+      const mcpClient = new MCPClient(tool.gateway_url, tool.protocol || 'json-rpc');
+      return await mcpClient.callTool({
+        tool_id: step.tool_id,
+        name: step.action,
+        arguments: loopParams,
+      });
+    }
+
+    // Default: return loop context
+    return {
+      loopContext: { item: loopParams.loopItem, index: loopParams.loopIndex },
+      parameters: loopParams,
+    };
   }
 
   private async pollQueuedJobs() {

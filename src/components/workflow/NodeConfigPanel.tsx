@@ -10,6 +10,19 @@ import { WorkflowNode } from './WorkflowBuilder';
 import { apiClient } from '@/lib/api/client';
 import { generatePDFThumbnail } from '@/lib/pdf-thumbnail';
 import { cn } from '@/lib/utils';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
 
 interface NodeConfigPanelProps {
   node: WorkflowNode;
@@ -34,10 +47,49 @@ export function NodeConfigPanel({ node, onNodeChange, onClose }: NodeConfigPanel
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  const [schema, setSchema] = useState<any | null>(null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [loopError, setLoopError] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalData(node.data);
+    // Reset schema state when node changes
+    setSchema(null);
+    setSchemaError(null);
   }, [node.id, node.data]);
+
+  // Fetch MCP tool schema when applicable
+  useEffect(() => {
+    const loadSchema = async () => {
+      if (node.type !== 'mcp-tool' || !localData.tool_id) {
+        setSchema(null);
+        setSchemaError(null);
+        return;
+      }
+      setSchemaLoading(true);
+      setSchemaError(null);
+      try {
+        const resp = await apiClient.getToolSchema(localData.tool_id, localData.method);
+        if (resp.success && resp.data?.methods?.length) {
+          const methodEntry = localData.method
+            ? resp.data.methods.find((m: any) => m.name === localData.method) || resp.data.methods[0]
+            : resp.data.methods[0];
+          setSchema(methodEntry?.inputSchema || null);
+        } else {
+          setSchema(null);
+          setSchemaError(resp.error?.message || 'No schema available for this tool.');
+        }
+      } catch (error: any) {
+        setSchema(null);
+        setSchemaError(error?.message || 'Failed to load schema');
+      } finally {
+        setSchemaLoading(false);
+      }
+    };
+
+    loadSchema();
+  }, [node.type, localData.tool_id, localData.method]);
 
   const handleChange = (key: string, value: any) => {
     const updated = { ...localData, [key]: value };
@@ -352,6 +404,107 @@ export function NodeConfigPanel({ node, onNodeChange, onClose }: NodeConfigPanel
           </div>
         );
 
+      case 'condition':
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <Label>Result</Label>
+              <Switch
+                checked={localData.conditionValue !== false}
+                onCheckedChange={(checked) => handleChange('conditionValue', checked)}
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-3 items-end">
+              <div className="col-span-1">
+                <Label>Left</Label>
+                <Input
+                  value={localData.leftOperand || ''}
+                  onChange={(e) => handleChange('leftOperand', e.target.value)}
+                  placeholder="value or {{var}}"
+                />
+              </div>
+              <div className="col-span-1">
+                <Label>Op</Label>
+                <Select
+                  value={localData.operator || 'equals'}
+                  onValueChange={(val) => handleChange('operator', val)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="equals">equals</SelectItem>
+                    <SelectItem value="not_equals">not equals</SelectItem>
+                    <SelectItem value="contains">contains</SelectItem>
+                    <SelectItem value="gt">greater than</SelectItem>
+                    <SelectItem value="lt">less than</SelectItem>
+                    <SelectItem value="gte">≥</SelectItem>
+                    <SelectItem value="lte">≤</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-1">
+                <Label>Right</Label>
+                <Input
+                  value={localData.rightOperand || ''}
+                  onChange={(e) => handleChange('rightOperand', e.target.value)}
+                  placeholder="value"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The switch sets a default boolean result. If Left/Right/Op are provided, the workflow will also record the evaluated comparison so downstream nodes can read it.
+            </p>
+          </div>
+        );
+
+      case 'loop':
+        return (
+          <div className="space-y-4">
+            <div>
+              <Label>Loop Variable</Label>
+              <Input
+                value={localData.itemKey || 'item'}
+                onChange={(e) => handleChange('itemKey', e.target.value || 'item')}
+                placeholder="item"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Name used for each element in downstream steps.</p>
+            </div>
+            <div>
+              <Label>Items (JSON array)</Label>
+              <Textarea
+                rows={5}
+                value={
+                  typeof localData.itemsInput === 'string'
+                    ? localData.itemsInput
+                    : JSON.stringify(localData.items || [], null, 2)
+                }
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  handleChange('itemsInput', raw);
+                  try {
+                    const parsed = raw.trim() ? JSON.parse(raw) : [];
+                    if (!Array.isArray(parsed)) {
+                      throw new Error('Value must be a JSON array');
+                    }
+                    setLoopError(null);
+                    handleChange('items', parsed);
+                  } catch (err: any) {
+                    setLoopError(err?.message || 'Invalid JSON array');
+                  }
+                }}
+                placeholder='["item1","item2"]'
+              />
+              {loopError && (
+                <p className="text-xs text-destructive mt-1">{loopError}</p>
+              )}
+              <p className="text-xs text-muted-foreground mt-1">
+                Paste an array of values. The loop node emits the array and count so following nodes can use them.
+              </p>
+            </div>
+          </div>
+        );
+
       case 'rag-indexing':
         return (
           <div className="space-y-4">
@@ -432,43 +585,85 @@ export function NodeConfigPanel({ node, onNodeChange, onClose }: NodeConfigPanel
           <div className="space-y-4">
             <div>
               <Label>Tool Name</Label>
-              <Input
-                value={localData.tool_name || ''}
-                disabled
-                className="bg-muted"
-              />
+              <Input value={localData.tool_name || ''} disabled className="bg-muted" />
             </div>
             <div>
               <Label>Method</Label>
-              <Input
-                value={localData.method || ''}
-                disabled
-                className="bg-muted"
-              />
+              <Input value={localData.method || ''} disabled className="bg-muted" />
             </div>
-            <div>
-              <Label>Parameters (JSON)</Label>
-              <Textarea
-                value={typeof localData.parameters === 'string' 
-                  ? localData.parameters 
-                  : JSON.stringify(localData.parameters || {}, null, 2)}
-                onChange={(e) => {
-                  try {
-                    const parsed = JSON.parse(e.target.value);
-                    handleChange('parameters', parsed);
-                  } catch {
-                    // Invalid JSON, store as string for now
-                    handleChange('parameters', e.target.value);
-                  }
-                }}
-                placeholder='{"query": "your query here", "image": "base64..."}'
-                rows={8}
-                className="font-mono text-xs"
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Enter parameters as JSON. For images, use base64 encoding or file references.
-              </p>
-            </div>
+
+            {schemaLoading && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Loading parameters…
+              </div>
+            )}
+
+            {schemaError && (
+              <div className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded p-2">
+                {schemaError}
+              </div>
+            )}
+
+            {schema && (
+              <Accordion type="single" collapsible defaultValue="schema">
+                <AccordionItem value="schema" className="border-none">
+                  <AccordionTrigger className="px-0">
+                    <div className="text-sm font-medium">Parameters</div>
+                  </AccordionTrigger>
+                  <AccordionContent className="px-0">
+                    <div className="space-y-3">
+                      <div className="text-xs text-muted-foreground">
+                        Parameters from tool schema. Required fields are marked.
+                      </div>
+                      {renderSchemaFields(schema, localData.parameters || {}, (key, value) => {
+                        const next = { ...(localData.parameters || {}) };
+                        if (value === undefined) {
+                          delete next[key];
+                        } else {
+                          next[key] = value;
+                        }
+                        handleChange('parameters', next);
+                      })}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            )}
+
+            {/* Fallback JSON editor */}
+            <Accordion type="single" collapsible defaultValue="json">
+              <AccordionItem value="json" className="border-none">
+                <AccordionTrigger className="px-0">
+                  <div className="text-sm font-medium">JSON Editor</div>
+                </AccordionTrigger>
+                <AccordionContent className="px-0">
+                  <div className="space-y-2">
+                    <Textarea
+                      value={
+                        typeof localData.parameters === 'string'
+                          ? localData.parameters
+                          : JSON.stringify(localData.parameters || {}, null, 2)
+                      }
+                      onChange={(e) => {
+                        try {
+                          const parsed = JSON.parse(e.target.value);
+                          handleChange('parameters', parsed);
+                        } catch {
+                          handleChange('parameters', e.target.value);
+                        }
+                      }}
+                      placeholder='{"query": "your query here", "image": "base64..."}'
+                      rows={8}
+                      className="font-mono text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Enter parameters as JSON. For images, use base64 encoding or file references.
+                    </p>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </div>
         );
 
@@ -510,4 +705,140 @@ export function NodeConfigPanel({ node, onNodeChange, onClose }: NodeConfigPanel
       </div>
     </GlassPanel>
   );
+}
+
+function renderSchemaFields(
+  schema: any,
+  parameters: Record<string, any>,
+  onChange: (key: string, value: any) => void
+) {
+  const properties = schema?.properties || {};
+  const required = new Set(schema?.required || []);
+
+  return Object.entries(properties).map(([key, prop]: [string, any]) => {
+    const type = prop.type || 'string';
+    const isRequired = required.has(key);
+    const value = parameters?.[key];
+    const description = prop.description;
+
+    const label = (
+      <div className="flex items-center justify-between">
+        <Label className="capitalize">
+          {key}
+          {isRequired && <span className="text-destructive ml-1">*</span>}
+        </Label>
+        {type && (
+          <span className="text-[11px] text-muted-foreground uppercase">{type}</span>
+        )}
+      </div>
+    );
+
+    switch (type) {
+      case 'boolean':
+        return (
+          <div key={key} className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              {label}
+              <Switch
+                checked={!!value}
+                onCheckedChange={(checked) => onChange(key, checked)}
+              />
+            </div>
+            {description && (
+              <p className="text-xs text-muted-foreground">{description}</p>
+            )}
+          </div>
+        );
+      case 'number':
+      case 'integer':
+        return (
+          <div key={key} className="space-y-1.5">
+            {label}
+            <Input
+              type="number"
+              value={value ?? ''}
+              onChange={(e) => {
+                const num = e.target.value === '' ? undefined : Number(e.target.value);
+                onChange(key, Number.isNaN(num) ? undefined : num);
+              }}
+              placeholder={description || ''}
+            />
+            {description && (
+              <p className="text-xs text-muted-foreground">{description}</p>
+            )}
+          </div>
+        );
+      case 'string':
+        if (Array.isArray(prop.enum) && prop.enum.length > 0) {
+          return (
+            <div key={key} className="space-y-1.5">
+              {label}
+              <Select
+                value={value ?? ''}
+                onValueChange={(val) => onChange(key, val)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select value" />
+                </SelectTrigger>
+                <SelectContent>
+                  {prop.enum.map((option: any) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {description && (
+                <p className="text-xs text-muted-foreground">{description}</p>
+              )}
+            </div>
+          );
+        }
+        return (
+          <div key={key} className="space-y-1.5">
+            {label}
+            <Input
+              value={value ?? ''}
+              onChange={(e) => onChange(key, e.target.value)}
+              placeholder={description || ''}
+            />
+            {description && (
+              <p className="text-xs text-muted-foreground">{description}</p>
+            )}
+          </div>
+        );
+      case 'array':
+      case 'object':
+      default:
+        return (
+          <div key={key} className="space-y-1.5">
+            {label}
+            <Textarea
+              value={
+                typeof value === 'string'
+                  ? value
+                  : value !== undefined
+                    ? JSON.stringify(value, null, 2)
+                    : ''
+              }
+              onChange={(e) => {
+                const text = e.target.value;
+                try {
+                  const parsed = JSON.parse(text);
+                  onChange(key, parsed);
+                } catch {
+                  onChange(key, text);
+                }
+              }}
+              placeholder={description || 'Enter JSON'}
+              rows={4}
+              className="font-mono text-xs"
+            />
+            {description && (
+              <p className="text-xs text-muted-foreground">{description}</p>
+            )}
+          </div>
+        );
+    }
+  });
 }

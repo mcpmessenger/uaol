@@ -7,12 +7,22 @@ import { Badge } from '@/components/ui/badge';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { NodeConfigPanel } from './NodeConfigPanel';
 import { WorkflowToolbar } from './WorkflowToolbar';
-import { Save, Play, Trash2, RotateCcw, Share2 } from 'lucide-react';
+import { Save, Play, Trash2, RotateCcw, Share2, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface WorkflowNode {
   id: string;
-  type: 'start' | 'file-upload' | 'text-extraction' | 'rag-indexing' | 'rag-query' | 'ai-generation' | 'mcp-tool' | 'end';
+  type:
+    | 'start'
+    | 'file-upload'
+    | 'text-extraction'
+    | 'rag-indexing'
+    | 'rag-query'
+    | 'ai-generation'
+    | 'mcp-tool'
+    | 'condition'
+    | 'loop'
+    | 'end';
   position: { x: number; y: number };
   data: {
     label: string;
@@ -26,6 +36,8 @@ export interface WorkflowEdge {
   target: string;
   sourceHandle?: string;
   targetHandle?: string;
+  conditionLabel?: 'true' | 'false'; // For condition nodes: which branch this edge represents
+  loopBody?: boolean; // For loop nodes: indicates this edge is part of the loop body
 }
 
 export interface WorkflowDefinition {
@@ -90,6 +102,27 @@ export function WorkflowBuilder({
   const [shareToken, setShareToken] = useState<string | undefined>(collabConfig?.token);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
   const [shareBusy, setShareBusy] = useState(false);
+  const jobStreamAbortRef = useRef<AbortController | null>(null);
+  const [showDocumentTray, setShowDocumentTray] = useState(false);
+
+  const aggregatedUploads = useMemo(() => {
+    const files: Array<{ nodeId: string; nodeLabel: string; fileId: string; filename: string; size?: number; type?: string }> = [];
+    nodes.forEach(node => {
+      if (node.type === 'file-upload' && Array.isArray(node.data.uploadedFiles)) {
+        node.data.uploadedFiles.forEach((f: any) => {
+          files.push({
+            nodeId: node.id,
+            nodeLabel: node.data.label || 'Upload',
+            fileId: f.fileId,
+            filename: f.filename,
+            size: f.size,
+            type: f.type || f.mimeType,
+          });
+        });
+      }
+    });
+    return files;
+  }, [nodes]);
   const docRef = useRef<Y.Doc | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const isApplyingRemoteRef = useRef(false);
@@ -434,7 +467,16 @@ export function WorkflowBuilder({
     console.log(`[WorkflowBuilder] handleAddNode called:`, { type, position });
     
     // Validate node type
-    const validTypes: WorkflowNode['type'][] = ['file-upload', 'text-extraction', 'rag-indexing', 'rag-query', 'ai-generation', 'mcp-tool'];
+    const validTypes: WorkflowNode['type'][] = [
+      'file-upload',
+      'text-extraction',
+      'rag-indexing',
+      'rag-query',
+      'ai-generation',
+      'mcp-tool',
+      'condition',
+      'loop',
+    ];
     if (!validTypes.includes(type)) {
       console.warn(`[WorkflowBuilder] Invalid node type: ${type}`);
       return;
@@ -669,7 +711,15 @@ export function WorkflowBuilder({
 
     setIsExecuting(true);
     setExecutionStatus({});
-    
+
+    // Helper to stop any existing job status stream
+    const stopJobStream = () => {
+      if (jobStreamAbortRef.current) {
+        jobStreamAbortRef.current.abort();
+        jobStreamAbortRef.current = null;
+      }
+    };
+
     try {
       const { apiClient } = await import('@/lib/api/client');
       
@@ -728,31 +778,163 @@ export function WorkflowBuilder({
         }
       });
 
-      // Poll for execution status with exponential backoff
-      let pollInterval = 500; // Start with 500ms
-      let pollAttempts = 0;
-      const maxPollAttempts = 120; // Max 2 minutes of polling (120 * 1s)
-      
-      const pollStatus = async () => {
-        pollAttempts++;
-        
-        // Stop polling if we've exceeded max attempts
-        if (pollAttempts > maxPollAttempts) {
-          setIsExecuting(false);
-          alert('Workflow execution is taking longer than expected. Please check the job status manually.');
-          return;
+      // Initialize all nodes as pending
+      nodes.forEach(node => {
+        if (node.type !== 'start' && node.type !== 'end') {
+          setExecutionStatus(prev => ({ ...prev, [node.id]: 'pending' }));
+        }
+      });
+
+      // Try SSE stream first, fallback to polling on error
+      const startStatusStream = async () => {
+        stopJobStream();
+        const abortController = new AbortController();
+        jobStreamAbortRef.current = abortController;
+        const token = typeof window !== 'undefined' ? localStorage.getItem('uaol_token') : null;
+        const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+        const streamUrl = `${baseUrl}/jobs/${jobId}/stream`;
+
+        const resp = await fetch(streamUrl, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: abortController.signal,
+        });
+
+        if (!resp.ok || !resp.body) {
+          throw new Error(`SSE stream failed: ${resp.status}`);
         }
 
-        const statusResponse = await apiClient.getWorkflowExecutionStatus(jobId);
-        if (statusResponse.success && statusResponse.data) {
-          const job = statusResponse.data;
-          
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        const applyStatus = (payload: any) => {
+          const status = payload?.status;
+          const finalOutput = payload?.final_output;
+
+          if (status === 'Running') {
+            nodes.forEach(node => {
+              if (node.type !== 'start' && node.type !== 'end') {
+                setExecutionStatus(prev => {
+                  const current = prev[node.id];
+                  if (!current || current === 'pending') {
+                    return { ...prev, [node.id]: 'running' };
+                  }
+                  return prev;
+                });
+              }
+            });
+            if (finalOutput) {
+              Object.keys(finalOutput).forEach(stepId => {
+                nodeToStepMap.forEach((mapped, nodeId) => {
+                  if (mapped === stepId) {
+                    setExecutionStatus(prev => ({ ...prev, [nodeId]: 'success' }));
+                  }
+                });
+              });
+            }
+          } else if (status === 'Success') {
+            if (finalOutput) {
+              Object.keys(finalOutput).forEach(stepId => {
+                nodeToStepMap.forEach((mapped, nodeId) => {
+                  if (mapped === stepId) {
+                    setExecutionStatus(prev => ({ ...prev, [nodeId]: 'success' }));
+                  }
+                });
+              });
+            } else {
+              nodes.forEach(node => {
+                if (node.type !== 'start' && node.type !== 'end') {
+                  setExecutionStatus(prev => ({ ...prev, [node.id]: 'success' }));
+                }
+              });
+            }
+            setIsExecuting(false);
+            stopJobStream();
+          } else if (status === 'Failed') {
+            nodes.forEach(node => {
+              if (node.type !== 'start' && node.type !== 'end') {
+                setExecutionStatus(prev => ({ ...prev, [node.id]: 'error' }));
+              }
+            });
+            setIsExecuting(false);
+            stopJobStream();
+          } else if (status === 'Queued') {
+            // Ensure queued is visible
+            nodes.forEach(node => {
+              if (node.type !== 'start' && node.type !== 'end') {
+                setExecutionStatus(prev => ({ ...prev, [node.id]: 'pending' }));
+              }
+            });
+          }
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let index;
+          while ((index = buffer.indexOf('\n\n')) >= 0) {
+            const chunk = buffer.slice(0, index).trim();
+            buffer = buffer.slice(index + 2);
+
+            if (!chunk) continue;
+
+            const lines = chunk.split('\n');
+            let eventType = 'message';
+            let dataLine = '';
+            for (const line of lines) {
+              if (line.startsWith('event:')) {
+                eventType = line.replace('event:', '').trim();
+              } else if (line.startsWith('data:')) {
+                dataLine += line.replace('data:', '').trim();
+              }
+            }
+
+            if (dataLine) {
+              try {
+                const parsed = JSON.parse(dataLine);
+                if (eventType === 'status' || eventType === 'done' || eventType === 'init') {
+                  applyStatus(parsed);
+                  if (eventType === 'done') {
+                    return;
+                  }
+                }
+              } catch (err) {
+                console.warn('Failed to parse SSE data', err, dataLine);
+              }
+            }
+          }
+        }
+      };
+
+      const pollStatus = async () => {
+        let pollInterval = 500;
+        let pollAttempts = 0;
+        const maxPollAttempts = 120;
+
+        const doPoll = async () => {
+          pollAttempts++;
+          if (pollAttempts > maxPollAttempts) {
+            setIsExecuting(false);
+            alert('Workflow execution is taking longer than expected. Please check the job status manually.');
+            return;
+          }
+
+          const statusResponse = await apiClient.getWorkflowExecutionStatus(jobId);
+          if (statusResponse.success && statusResponse.data) {
+            const job = statusResponse.data;
+            applyPollStatus(job);
+          } else {
+            pollInterval = Math.min(pollInterval * 1.5, 5000);
+          }
+          setTimeout(doPoll, pollInterval);
+        };
+
+        const applyPollStatus = (job: any) => {
           if (job.status === 'Success') {
-            // All steps completed successfully
-            // Map final_output to node statuses
             if (job.final_output) {
               Object.keys(job.final_output).forEach(stepId => {
-                // Find node by step ID
                 nodeToStepMap.forEach((mappedStepId, nodeId) => {
                   if (mappedStepId === stepId) {
                     setExecutionStatus(prev => ({ ...prev, [nodeId]: 'success' }));
@@ -760,7 +942,6 @@ export function WorkflowBuilder({
                 });
               });
             } else {
-              // Fallback: mark all nodes as success
               nodes.forEach(node => {
                 if (node.type !== 'start' && node.type !== 'end') {
                   setExecutionStatus(prev => ({ ...prev, [node.id]: 'success' }));
@@ -769,7 +950,6 @@ export function WorkflowBuilder({
             }
             setIsExecuting(false);
           } else if (job.status === 'Failed') {
-            // Mark all nodes as error (or could be more granular based on error_message)
             nodes.forEach(node => {
               if (node.type !== 'start' && node.type !== 'end') {
                 setExecutionStatus(prev => ({ ...prev, [node.id]: 'error' }));
@@ -777,9 +957,7 @@ export function WorkflowBuilder({
             });
             setIsExecuting(false);
           } else if (job.status === 'Running') {
-            // Job is running - check if we have partial results
             if (job.final_output) {
-              // Some steps have completed
               Object.keys(job.final_output).forEach(stepId => {
                 nodeToStepMap.forEach((mappedStepId, nodeId) => {
                   if (mappedStepId === stepId) {
@@ -788,16 +966,11 @@ export function WorkflowBuilder({
                 });
               });
             }
-            
-            // Mark nodes that haven't completed yet as running
-            // Find the first node that hasn't completed
             const workflowSteps = workflowDefinition.steps;
             for (const step of workflowSteps) {
               const nodeId = Array.from(nodeToStepMap.entries())
                 .find(([_, stepId]) => stepId === step.id)?.[0];
-              
               if (nodeId) {
-                // Use functional update to get current state
                 setExecutionStatus(prev => {
                   const currentStatus = prev[nodeId];
                   if (!currentStatus || currentStatus === 'pending') {
@@ -807,31 +980,22 @@ export function WorkflowBuilder({
                 });
               }
             }
-            
-            // Continue polling with current interval
-            setTimeout(pollStatus, pollInterval);
-          } else {
-            // Queued or other status - continue polling
-            setTimeout(pollStatus, pollInterval);
           }
-        } else {
-          // Error getting status - increase interval and retry
-          pollInterval = Math.min(pollInterval * 1.5, 5000); // Max 5 seconds
-          setTimeout(pollStatus, pollInterval);
-        }
+        };
+
+        setTimeout(doPoll, 500);
       };
 
-      // Initialize all nodes as pending
-      nodes.forEach(node => {
-        if (node.type !== 'start' && node.type !== 'end') {
-          setExecutionStatus(prev => ({ ...prev, [node.id]: 'pending' }));
-        }
-      });
-
-      // Start polling
-      setTimeout(pollStatus, 500);
+      try {
+        await startStatusStream();
+      } catch (streamErr) {
+        console.warn('Falling back to polling for job status', streamErr);
+        stopJobStream();
+        await pollStatus();
+      }
     } catch (error: any) {
       console.error('Workflow execution failed:', error);
+      stopJobStream();
       nodes.forEach(node => {
         if (node.type !== 'start' && node.type !== 'end') {
           setExecutionStatus(prev => ({ ...prev, [node.id]: 'error' }));
@@ -921,6 +1085,63 @@ export function WorkflowBuilder({
             </div>
           </div>
         </div>
+
+        {/* Bottom Left Controls - Document Tray */}
+        <div className="absolute bottom-4 left-4 z-[100] flex items-center gap-2 pointer-events-auto">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowDocumentTray((prev) => !prev)}
+            className="h-9 px-3 rounded-full bg-card/90 backdrop-blur-sm border border-border/50 hover:bg-card shadow-lg"
+          >
+            <FileText className="w-4 h-4 mr-2" />
+            {showDocumentTray ? 'Hide' : 'Show'} Files
+            <Badge variant="secondary" className="ml-2">
+              {aggregatedUploads.length}
+            </Badge>
+          </Button>
+        </div>
+
+        {/* Document Tray Panel */}
+        {showDocumentTray && (
+          <div className="absolute bottom-16 left-4 z-[90] w-80 max-h-72 overflow-hidden rounded-xl border border-border/60 bg-card/95 backdrop-blur-md shadow-xl">
+            <div className="px-4 py-3 border-b border-border/60 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <FileText className="w-4 h-4" />
+                Uploaded Files
+              </div>
+              <Badge variant="outline" className="text-[11px]">
+                {aggregatedUploads.length}
+              </Badge>
+            </div>
+            <div className="max-h-64 overflow-y-auto">
+              {aggregatedUploads.length === 0 ? (
+                <div className="px-4 py-3 text-sm text-muted-foreground">
+                  No files uploaded yet.
+                </div>
+              ) : (
+                <div className="divide-y divide-border/60">
+                  {aggregatedUploads.map((file) => (
+                    <div key={file.fileId} className="px-4 py-3 space-y-1">
+                      <div className="flex items-center justify-between text-sm font-medium">
+                        <span className="truncate">{file.filename}</span>
+                        {file.size ? (
+                          <span className="text-xs text-muted-foreground">
+                            {(file.size / 1024).toFixed(1)} KB
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="text-xs text-muted-foreground flex items-center justify-between">
+                        <span className="truncate">Node: {file.nodeLabel}</span>
+                        {file.type && <span>{file.type}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Top Right Controls */}
         <div 
@@ -1022,6 +1243,8 @@ function getNodeLabel(type: WorkflowNode['type']): string {
     'rag-query': 'Query RAG',
     'ai-generation': 'AI Generation',
     'mcp-tool': 'MCP Tool',
+    'condition': 'Conditional',
+    'loop': 'Loop',
     'end': 'End',
   };
   return labels[type] || 'Node';
@@ -1146,6 +1369,8 @@ function getActionForNodeType(type: WorkflowNode['type'], nodeData?: any): strin
     'rag-query': 'query',
     'ai-generation': 'generate',
     'mcp-tool': '',
+    'condition': 'condition',
+    'loop': 'loop',
     'end': '',
   };
   return actionMap[type] || '';
